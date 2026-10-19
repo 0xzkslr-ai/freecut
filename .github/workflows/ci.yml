@@ -1,0 +1,34 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux Qt libraries
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libegl1 libopengl0 xvfb xauth libxcb-cursor0 libxkbcommon-x11-0
+          libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: python -m pytest
+      - name: Check real screen capture in isolated X11 desktop
+        if: runner.os == 'Linux'
+        run: >-
+          xvfb-run -a env QT_QPA_PLATFORM=xcb FREECUT_NATIVE_TEST=1
+          python -m pytest -o addopts= tests/test_native_capture.py
+      - run: python -m build
