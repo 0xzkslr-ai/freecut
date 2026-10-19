@@ -2,7 +2,7 @@
 
 自由形状截图工具。用套索画出轮廓，或用多边形逐点勾勒，再保存为透明 PNG。
 
-当前版本使用 **Tauri 2 + TypeScript + Rust**，发布包无需 Python 或 Qt。
+使用 **Tauri 2 + TypeScript + Rust**。
 截图后端当前支持 Windows 10 / 11 x64；Linux / macOS 的原生截图尚未迁移。
 
 ## 使用
@@ -117,14 +117,8 @@ npm run tauri -- build
 
 `src-tauri\target\release\FreeCut.exe` 为便携程序；
 `src-tauri\target\release\bundle\nsis\` 为安装包。
-脚本会将程序和许可整理到 `dist\FreeCut-Tauri\`，不包含 Python / Qt 或 AI 模型。
-WebView2 使用系统运行时，其安装体积另计。构建与验证记录见 [MIGRATION.md](MIGRATION.md)。
-
-## Python 旧版
-
-`src/freecut/`、`tests/` 和 `pyproject.toml` 保留为迁移对照，旧版本位于 Git
-提交 `76cf8b0`。手动运行旧版：`.venv\Scripts\python.exe -m freecut`。
-旧包 `dist\FreeCut\` 与新的 `dist\FreeCut-Tauri\` 分开保留。
+脚本会将程序和许可整理到 `dist\FreeCut-Tauri\`。
+WebView2 使用系统运行时，其安装体积另计。
 
 ## 许可
 
