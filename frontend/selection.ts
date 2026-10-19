@@ -1,5 +1,5 @@
 export type Point = [number, number];
-export type Mode = "lasso" | "polygon";
+export type Mode = "lasso" | "polygon" | "rectangle";
 
 export function clampPoint(point: Point, width: number, height: number): Point {
   if (
@@ -67,6 +67,19 @@ export function containsPoint(points: Point[], [x, y]: Point): boolean {
 
 const distance = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
+function rectanglePoints(a: Point, b: Point): Point[] {
+  const left = Math.min(a[0], b[0]),
+    top = Math.min(a[1], b[1]);
+  const right = Math.max(a[0], b[0]),
+    bottom = Math.max(a[1], b[1]);
+  return [
+    [left, top],
+    [right, top],
+    [right, bottom],
+    [left, bottom],
+  ];
+}
+
 export class Selection {
   points: Point[] = [];
   complete = false;
@@ -74,6 +87,7 @@ export class Selection {
   private vertex: number | null = null;
   private anchor: Point | null = null;
   private original: Point[] = [];
+  private rectangleOrigin: Point | null = null;
 
   constructor(public mode: Mode = "lasso") {}
 
@@ -83,6 +97,7 @@ export class Selection {
     this.complete = this.drawing = false;
     this.vertex = this.anchor = null;
     this.original = [];
+    this.rectangleOrigin = null;
   }
 
   add(point: Point, minimumDistance = 0) {
@@ -103,17 +118,18 @@ export class Selection {
   undo() {
     this.drawing = false;
     this.anchor = this.vertex = null;
-    if (this.mode === "lasso") this.reset();
+    if (this.mode !== "polygon") this.reset();
     else if (this.complete) this.complete = false;
     else this.points.pop();
   }
 
   down(point: Point) {
     if (this.complete) {
-      if (this.mode === "polygon") {
+      if (this.mode !== "lasso") {
         const vertex = this.points.findIndex((p) => distance(p, point) <= 9);
         if (vertex !== -1) {
           this.vertex = vertex;
+          this.original = this.points.map((p) => [...p]);
           return;
         }
       }
@@ -124,8 +140,11 @@ export class Selection {
       }
       this.reset();
     }
-    if (this.mode === "lasso") {
-      this.points = [point];
+    if (this.mode !== "polygon") {
+      this.rectangleOrigin = this.mode === "rectangle" ? point : null;
+      this.points = this.rectangleOrigin
+        ? rectanglePoints(point, point)
+        : [point];
       this.drawing = true;
     } else if (this.points.length >= 3 && distance(point, this.points[0]) <= 9)
       this.finish();
@@ -133,24 +152,39 @@ export class Selection {
   }
 
   move(point: Point, width: number, height: number) {
-    if (this.vertex !== null) this.points[this.vertex] = point;
-    else if (this.anchor)
+    if (this.vertex !== null) {
+      if (this.mode === "rectangle")
+        this.points = rectanglePoints(
+          point,
+          this.original[(this.vertex + 2) % 4],
+        );
+      else this.points[this.vertex] = point;
+    } else if (this.anchor)
       this.points = translatePoints(
         this.original,
         [point[0] - this.anchor[0], point[1] - this.anchor[1]],
         width,
         height,
       );
-    else if (this.drawing) this.add(point, 1.5);
+    else if (this.drawing) {
+      if (this.rectangleOrigin)
+        this.points = rectanglePoints(this.rectangleOrigin, point);
+      else this.add(point, 1.5);
+    }
   }
 
   up(point: Point, width: number, height: number) {
     if (this.drawing) {
-      this.add(point);
+      if (this.rectangleOrigin) this.move(point, width, height);
+      else this.add(point);
       this.drawing = false;
       this.finish();
-    } else this.move(point, width, height);
+    } else {
+      this.move(point, width, height);
+      if (this.mode === "rectangle" && this.vertex !== null) this.finish();
+    }
     this.vertex = this.anchor = null;
     this.original = [];
+    this.rectangleOrigin = null;
   }
 }

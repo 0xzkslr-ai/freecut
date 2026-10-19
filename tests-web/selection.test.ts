@@ -181,6 +181,120 @@ describe("selection interaction", () => {
     expect(s.points).toHaveLength(1);
   });
 });
+describe("rectangle interaction", () => {
+  it.each([
+    [
+      [10, 20],
+      [80, 90],
+    ],
+    [
+      [80, 90],
+      [10, 20],
+    ],
+    [
+      [80, 20],
+      [10, 90],
+    ],
+    [
+      [10, 90],
+      [80, 20],
+    ],
+  ] as [Point, Point][])(
+    "normalizes either drag direction from %j to %j",
+    (start, end) => {
+      const s = new Selection("rectangle");
+      s.down(start);
+      s.move([40, 50], 100, 100);
+      expect(s.points).toHaveLength(4);
+      s.up(end, 100, 100);
+      expect(s.complete).toBe(true);
+      expect(s.drawing).toBe(false);
+      expect(s.points).toEqual([
+        [10, 20],
+        [80, 20],
+        [80, 90],
+        [10, 90],
+      ]);
+    },
+  );
+  it.each([
+    [10, 10],
+    [10, 80],
+    [80, 10],
+  ] as Point[])("rejects a zero-area rectangle ending at %j", (x, y) => {
+    const s = new Selection("rectangle");
+    s.down([10, 10]);
+    s.up([x, y], 100, 100);
+    expect(s.complete).toBe(false);
+  });
+  it("moves the rectangle as a whole without deforming at the screen edge", () => {
+    const s = new Selection("rectangle");
+    s.down([10, 10]);
+    s.up([80, 80], 100, 100);
+    s.down([40, 40]);
+    s.up([100, 100], 100, 100);
+    expect(s.points).toEqual([
+      [30, 30],
+      [100, 30],
+      [100, 100],
+      [30, 100],
+    ]);
+    expect(s.complete).toBe(true);
+  });
+  it.each([0, 1, 2, 3])(
+    "resizes corner %i around its fixed opposite, including crossing it",
+    (corner) => {
+      const s = new Selection("rectangle");
+      s.down([10, 10]);
+      s.up([80, 80], 100, 100);
+      const opposite = s.points[(corner + 2) % 4];
+      s.down(s.points[corner]);
+      s.move([90, 90], 100, 100);
+      s.up([0, 100], 100, 100);
+      expect(s.points).toEqual([
+        [0, opposite[1]],
+        [opposite[0], opposite[1]],
+        [opposite[0], 100],
+        [0, 100],
+      ]);
+      expect(s.complete).toBe(true);
+    },
+  );
+  it("rejects a rectangle resized to a line, and starts a new one outside the old region", () => {
+    const s = new Selection("rectangle");
+    s.down([10, 10]);
+    s.up([80, 80], 100, 100);
+    s.down([10, 10]);
+    s.up([80, 10], 100, 100);
+    expect(s.complete).toBe(false);
+    s.down([20, 20]);
+    s.up([60, 60], 100, 100);
+    s.down([90, 90]);
+    s.up([100, 100], 100, 100);
+    expect(s.points).toEqual([
+      [90, 90],
+      [100, 90],
+      [100, 100],
+      [90, 100],
+    ]);
+  });
+  it("undo and tool changes reset rectangles instead of reopening them as polygons", () => {
+    const s = new Selection("rectangle");
+    s.down([10, 10]);
+    s.up([80, 80], 100, 100);
+    s.undo();
+    expect(s.points).toEqual([]);
+    expect(s.complete).toBe(false);
+    s.down([10, 10]);
+    s.undo();
+    s.move([80, 80], 100, 100);
+    expect(s.points).toEqual([]);
+    s.reset("polygon");
+    s.down([30, 40]);
+    expect(s.points).toEqual([[30, 40]]);
+    expect(s.drawing).toBe(false);
+  });
+});
 describe("shortcut recording", () => {
   const event = {
     code: "KeyA",

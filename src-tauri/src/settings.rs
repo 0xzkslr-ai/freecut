@@ -10,6 +10,7 @@ pub enum Mode {
     #[default]
     Lasso,
     Polygon,
+    Rectangle,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -229,6 +229,16 @@ fn settings_roundtrip_and_invalid_file_recovery() {
     let loaded = settings::load(&path);
     assert_eq!(loaded.mode, Mode::Polygon);
     assert_eq!(loaded.hotkey, set.hotkey);
+    let rectangle = Settings {
+        mode: Mode::Rectangle,
+        hotkey: set.hotkey.clone(),
+    };
+    settings::save(&path, &rectangle).unwrap();
+    assert_eq!(settings::load(&path).mode, Mode::Rectangle);
+    assert_eq!(
+        serde_json::to_value(&rectangle).unwrap()["mode"],
+        "rectangle"
+    );
     std::fs::write(&path, b"broken").unwrap();
     assert_eq!(settings::load(&path).mode, Mode::Lasso);
     std::fs::write(&path, r#"{"hotkey":"Ctrl+F12"}"#).unwrap();

@@ -129,6 +129,70 @@ test("main flow, tools, capture, preview, save and clipboard", async ({
   await page.keyboard.press("Control+q");
   expect(await commands(page, "quit_app")).toHaveLength(1);
 });
+test("rectangle tool is selected and persisted through the backend", async ({
+  page,
+}) => {
+  await mockDesktop(page);
+  const button = page.getByRole("button", { name: "矩形选取" });
+  await button.click();
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  expect((await commands(page, "set_mode"))[0].args.mode).toBe("rectangle");
+  await expect(page.getByRole("button", { name: "自由套索" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+});
+test("rectangle drag, move, corner resize and confirmation keep four axis-aligned points", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.keyboard.press("KeyM");
+  await expect(page.locator("#hint")).toContainText("矩形选取");
+  expect((await commands(page, "set_mode"))[0].args.mode).toBe("rectangle");
+  await page.mouse.move(500, 450);
+  await page.mouse.down();
+  await page.mouse.move(200, 200, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator("#selection-toolbar")).toBeVisible();
+  await expect(page.locator("#selection-size")).toHaveText("约 600 × 500 px");
+  await page.mouse.move(300, 300);
+  await page.mouse.down();
+  await page.mouse.move(320, 320);
+  await page.mouse.up();
+  await page.mouse.move(520, 470);
+  await page.mouse.down();
+  await page.mouse.move(600, 500);
+  await page.mouse.up();
+  await expect(page.locator("#selection-size")).toHaveText("约 760 × 560 px");
+  await page.screenshot({ path: "test-results/overlay-rectangle.png" });
+  await page.keyboard.press("Enter");
+  expect((await commands(page, "accept_capture"))[0].args.points).toEqual([
+    [220, 220],
+    [600, 220],
+    [600, 500],
+    [220, 500],
+  ]);
+});
+test("empty rectangles are rejected; undo and escape leave the overlay usable", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.keyboard.press("KeyM");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#hint")).toContainText("宽度和高度");
+  await page.mouse.click(200, 200);
+  await expect(page.locator("#hint")).toContainText("宽度和高度");
+  await expect(page.locator("#selection-toolbar")).toBeHidden();
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 400);
+  await page.mouse.up();
+  await expect(page.locator("#selection-toolbar")).toBeVisible();
+  await page.keyboard.press("Backspace");
+  await expect(page.locator("#selection-toolbar")).toBeHidden();
+  await page.keyboard.press("Escape");
+  expect(await commands(page, "cancel_capture")).toHaveLength(1);
+});
 test("records new shortcuts, reports conflict and applies a successful replacement", async ({
   page,
 }) => {

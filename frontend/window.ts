@@ -12,6 +12,7 @@ export async function mountMain(root: HTMLElement) {
           <div class="modes" role="group" aria-label="截图工具">
             <button class="mode" data-mode="lasso" aria-pressed="true"><strong>自由套索</strong><span>按住鼠标，画出任意轮廓</span></button>
             <button class="mode" data-mode="polygon" aria-pressed="false"><strong>多边形</strong><span>逐点连线，精确勾勒边界</span></button>
+            <button class="mode" data-mode="rectangle" aria-pressed="false"><strong>矩形选取</strong><span>拖动框选，快速截取矩形</span></button>
           </div>
           <label for="monitor">截取屏幕</label><select id="monitor" aria-label="选择要截取的显示器"></select>
           <button class="primary capture" id="capture">开始截图</button><p class="muted small">Ctrl + Shift + A · 窗口内快捷键</p>

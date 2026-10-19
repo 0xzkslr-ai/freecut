@@ -35,7 +35,7 @@ export async function mountOverlay(root: HTMLElement) {
     selection.points.forEach(([x, y], i) =>
       i ? path.lineTo(x, y) : path.moveTo(x, y),
     );
-    if (selection.complete) path.closePath();
+    if (selection.complete || selection.mode === "rectangle") path.closePath();
     // Clip the shade rather than clearing the canvas: the frozen pixels stay intact.
     ctx.save();
     if (selection.complete) {
@@ -54,8 +54,8 @@ export async function mountOverlay(root: HTMLElement) {
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = "#73f1ce";
       ctx.stroke(path);
-      if (selection.mode === "polygon") {
-        if (!selection.complete) {
+      if (selection.mode !== "lasso") {
+        if (selection.mode === "polygon" && !selection.complete) {
           ctx.beginPath();
           ctx.moveTo(...selection.points.at(-1)!);
           ctx.lineTo(...cursor);
@@ -79,10 +79,12 @@ export async function mountOverlay(root: HTMLElement) {
     hint.textContent =
       message ||
       (selection.complete
-        ? `拖动选区移动位置${selection.mode === "polygon" ? " · 拖动顶点调整轮廓" : ""}  |  Enter 确认 · R 重选 · Tab 隐藏提示 · Esc 取消`
+        ? `拖动选区移动位置${selection.mode === "polygon" ? " · 拖动顶点调整轮廓" : selection.mode === "rectangle" ? " · 拖动角点调整大小" : ""}  |  Enter 确认 · R 重选 · Tab 隐藏提示 · Esc 取消`
         : selection.mode === "lasso"
-          ? "自由套索：按住左键绘制，松开闭合  |  P 多边形 · Tab 隐藏提示 · Esc 取消"
-          : "多边形：单击添加顶点，点击起点 / 双击 / Enter 闭合\n右键 / Backspace / Ctrl+Z 撤销 · L 套索 · Tab 隐藏提示 · Esc 取消");
+          ? "自由套索：按住左键绘制，松开闭合  |  P 多边形 · M 矩形 · Tab 隐藏提示 · Esc 取消"
+          : selection.mode === "rectangle"
+            ? "矩形选取：按住左键拖动，松开完成  |  L 套索 · P 多边形 · Tab 隐藏提示 · Esc 取消"
+            : "多边形：单击添加顶点，点击起点 / 双击 / Enter 闭合\n右键 / Backspace / Ctrl+Z 撤销 · L 套索 · M 矩形 · Tab 隐藏提示 · Esc 取消");
     hint.hidden = !hudVisible;
     toolbar.hidden = !selection.complete || !hudVisible;
     const b = bounds(selection.points);
@@ -119,7 +121,10 @@ export async function mountOverlay(root: HTMLElement) {
     if (!session || resolving) return;
     if (!selection.complete) {
       if (!selection.finish())
-        message = "选区需要至少三个不共线的点。请继续绘制，或按 R 重选。";
+        message =
+          selection.mode === "rectangle"
+            ? "请拖出有宽度和高度的矩形，或按 R 重选。"
+            : "选区需要至少三个不共线的点。请继续绘制，或按 R 重选。";
       render();
       return;
     }
@@ -171,8 +176,11 @@ export async function mountOverlay(root: HTMLElement) {
     selection.up(point(event), innerWidth, innerHeight);
     if (canvas.hasPointerCapture(event.pointerId))
       canvas.releasePointerCapture(event.pointerId);
-    if (selection.mode === "lasso" && !selection.complete)
-      message = "选区需要至少三个不共线的点。请按 R 重新绘制。";
+    if (selection.mode !== "polygon" && !selection.complete)
+      message =
+        selection.mode === "rectangle"
+          ? "请拖出有宽度和高度的矩形，或按 R 重选。"
+          : "选区需要至少三个不共线的点。请按 R 重新绘制。";
     render();
   };
   canvas.onpointercancel = () => reset();
@@ -191,7 +199,7 @@ export async function mountOverlay(root: HTMLElement) {
     if (resolving) return;
     if (
       ["Escape", "Enter", "Backspace", "Delete", "Tab"].includes(event.key) ||
-      ["KeyL", "KeyP", "KeyR", "KeyZ"].includes(event.code)
+      ["KeyL", "KeyP", "KeyM", "KeyR", "KeyZ"].includes(event.code)
     )
       event.preventDefault();
     message = "";
@@ -204,8 +212,14 @@ export async function mountOverlay(root: HTMLElement) {
     )
       selection.undo();
     else if (event.code === "KeyR") reset();
-    else if (event.code === "KeyL" || event.code === "KeyP") {
-      selection.reset(event.code === "KeyL" ? "lasso" : "polygon");
+    else if (["KeyL", "KeyP", "KeyM"].includes(event.code)) {
+      selection.reset(
+        event.code === "KeyL"
+          ? "lasso"
+          : event.code === "KeyP"
+            ? "polygon"
+            : "rectangle",
+      );
       void backend.mode(selection.mode).catch((error: unknown) => {
         message = String(error);
         render();
