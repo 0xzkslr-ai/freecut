@@ -79,10 +79,15 @@ class _HotkeyEventFilter(QAbstractNativeEventFilter):
         if (
             event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG")
             or self.active_id is None
-            or not message
+            or message is None
         ):
             return False, 0
-        native = wintypes.MSG.from_address(int(message))
+        # Qt passes a Shiboken VoidPtr whose buffer size may be zero or unset.
+        # Its truth value does not indicate whether the native address is valid.
+        address = int(message)
+        if address == 0:
+            return False, 0
+        native = wintypes.MSG.from_address(address)
         if native.message == WM_HOTKEY and native.wParam == self.active_id:
             self.callback()
             return True, 0

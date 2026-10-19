@@ -26,6 +26,11 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: python -m pytest
+      - name: Check Windows native hotkey replacement
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: python tests/test_windows_hotkeys.py
       - name: Check real screen capture in isolated X11 desktop
         if: runner.os == 'Linux'
         run: >-

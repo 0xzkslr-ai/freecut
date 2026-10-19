@@ -159,20 +159,25 @@ def test_setting_write_failure_reports_active_shortcut(background_window, monkey
     assert "保存失败" in window.hotkey_status_label.text()
 
 
-def test_hotkey_captures_from_background_and_ignores_repeated_requests(background_window, qapp):
+def test_hotkey_captures_from_background_and_ignores_repeated_requests(
+    background_window, qapp, image, monkeypatch
+):
     window = background_window
+    screen = QGuiApplication.screens()[0]
+    monkeypatch.setattr(screen, "grabWindow", lambda *args: QPixmap.fromImage(image))
     window.hide_to_tray()
     window._hotkey.activated.emit()
-    qapp.processEvents()
+    QTest.qWait(1)
     assert window._capturing
     assert not window.isVisible()
     assert window._return_to_background
-    timer_id = window._capture_timer.timerId()
+    overlay = window._overlay
+    assert overlay is not None
+    assert window._capture_timer.interval() == 0
     window._hotkey.activated.emit()
     qapp.processEvents()
-    assert window._capture_timer.timerId() == timer_id
-    window._capture_timer.stop()
-    window._on_cancel()
+    assert window._overlay is overlay
+    QTest.keyClick(overlay, Qt.Key.Key_Escape)
     assert not window.isVisible()
     assert not window._capturing
     window.show_main_window()

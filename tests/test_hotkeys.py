@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import shiboken6
 from PySide6.QtCore import QByteArray
 from PySide6.QtGui import QKeySequence
 
@@ -130,7 +131,15 @@ def test_initial_conflict_does_not_install_filter(qapp):
 
 
 @pytest.mark.parametrize("event_type", [b"windows_generic_MSG", b"windows_dispatcher_MSG"])
-def test_native_windows_message_activates_only_registered_shortcut(qapp, event_type):
+@pytest.mark.parametrize(
+    "pointer_type",
+    [
+        int,
+        shiboken6.VoidPtr,
+        pytest.param(lambda address: shiboken6.VoidPtr(address, 0), id="zero-sized-VoidPtr"),
+    ],
+)
+def test_native_windows_message_activates_only_registered_shortcut(qapp, event_type, pointer_type):
     api = Mock()
     api.RegisterHotKey.return_value = True
     service = GlobalHotkey(user32=api)
@@ -141,7 +150,7 @@ def test_native_windows_message_activates_only_registered_shortcut(qapp, event_t
         message = wintypes.MSG()
         message.message = WM_HOTKEY
         message.wParam = service._filter.active_id
-        pointer = ctypes.addressof(message)
+        pointer = pointer_type(ctypes.addressof(message))
         assert service._filter.nativeEventFilter(QByteArray(event_type), pointer) == (True, 0)
         assert called == [True]
         message.wParam += 100
@@ -151,6 +160,7 @@ def test_native_windows_message_activates_only_registered_shortcut(qapp, event_t
         assert service._filter.nativeEventFilter(event_type, pointer) == (False, 0)
         assert service._filter.nativeEventFilter(b"xcb_generic_event_t", 1) == (False, 0)
         assert service._filter.nativeEventFilter(event_type, 0) == (False, 0)
+        assert service._filter.nativeEventFilter(event_type, None) == (False, 0)
         service.close()
         assert service._filter.nativeEventFilter(event_type, pointer) == (False, 0)
         assert called == [True]

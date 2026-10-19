@@ -121,6 +121,8 @@ def test_capture_start_hides_window_and_debounces(window):
     assert window._capturing
     assert not window.capture_button.isEnabled()
     assert window._capture_timer.isActive()
+    assert window._capture_timer.interval() == 0
+    assert not hasattr(window, "delay_combo")
     target = window._target_screen
     window._begin_capture()
     assert window._target_screen is target
@@ -129,6 +131,17 @@ def test_capture_start_hides_window_and_debounces(window):
     assert window.isVisible()
     assert window.capture_button.isEnabled()
     assert "取消" in window.status_label.text()
+
+
+def test_late_capture_callback_after_exit_is_ignored(window, monkeypatch):
+    capture = Mock()
+    screen = QGuiApplication.screens()[0]
+    monkeypatch.setattr(screen, "grabWindow", capture)
+    window._take_capture()
+    window._begin_capture()
+    window.shutdown()
+    window._take_capture()
+    capture.assert_not_called()
 
 
 def test_full_capture_workflow_with_mocked_os_pixels(window, image, monkeypatch, qapp):

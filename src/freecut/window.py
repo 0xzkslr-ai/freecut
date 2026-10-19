@@ -107,12 +107,6 @@ class MainWindow(QMainWindow):
         self.screen_combo = QComboBox()
         self.screen_combo.setAccessibleName("选择要截取的显示器")
         controls.addWidget(self.screen_combo)
-        controls.addWidget(self._label("开始前等待", "section"))
-        self.delay_combo = QComboBox()
-        self.delay_combo.setAccessibleName("截图延迟")
-        for name, delay in (("立即截图", 350), ("等待 2 秒", 2000), ("等待 5 秒", 5000)):
-            self.delay_combo.addItem(name, delay)
-        controls.addWidget(self.delay_combo)
         controls.addSpacing(8)
         self.capture_button = QPushButton("开始截图")
         self.capture_button.setObjectName("primary")
@@ -358,13 +352,17 @@ class MainWindow(QMainWindow):
         )
         self.capture_button.setEnabled(False)
         self.hide()
-        self._capture_timer.start(self.delay_combo.currentData())
+        # Yield only to apply the hidden-window state; no timed screenshot delay.
+        self._capture_timer.start(0)
 
     def _take_capture(self) -> None:
+        if self._closing or not self._capturing:
+            return
         try:
             screen = self._target_screen
             if screen not in QGuiApplication.screens():
                 raise RuntimeError("目标屏幕已断开，请重新选择显示器。")
+            QGuiApplication.sync()
             image = screen.grabWindow(0).toImage()
             if image.isNull():
                 raise RuntimeError("无法获取屏幕画面。请检查系统截图权限后重试。")

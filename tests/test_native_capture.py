@@ -38,7 +38,7 @@ def test_real_screen_pixels_through_selection_to_png(
             window._hotkey.activated.emit()
         else:
             window.capture_button.click()
-        QTest.qWait(650)
+        QTest.qWait(30)
         overlay = window._overlay
         assert overlay is not None
         assert overlay.image.pixelColor(120, 120) == QColor("#e56537")
@@ -68,7 +68,7 @@ def test_real_screen_pixels_through_selection_to_png(
             window._hotkey.activated.emit()
         else:
             window.capture_button.click()
-        QTest.qWait(650)
+        QTest.qWait(30)
         QTest.keyClick(window._overlay, Qt.Key.Key_Escape)
         assert window.isVisible() == (not from_background)
         assert window.image == previous
