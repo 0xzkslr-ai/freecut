@@ -40,6 +40,8 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 
 当前支持 **Windows 10 / 11 x64**。
 
+从 [GitHub Releases](https://github.com/0xzkslr-ai/freecut/releases/latest) 下载发布版。
+
 项目通过 [GitHub Actions](https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml)
 构建 Windows 便携版和 NSIS 安装包。构建成功后，可在对应运行页面的 **Artifacts**
 中下载 `FreeCut-windows-x64`：
@@ -198,6 +200,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --locked
 
 报告截图、缩放或快捷键问题时，请附上 Windows 版本、屏幕分辨率与缩放倍率、
 复现步骤和预期结果。修改选区逻辑或图像处理时，请补充对应测试。
+
+## 社区
+
+本开源项目已链接并认可 [LINUX DO](https://linux.do/) 社区。
 
 ## 许可
 
