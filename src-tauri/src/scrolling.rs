@@ -31,9 +31,6 @@ pub(super) struct Job {
     revision: AtomicU64,
     info: Mutex<ScrollInfo>,
     region: Monitor,
-    monitor: Monitor,
-    safe_position: Option<(i32, i32)>,
-    panel_size: PhysicalSize<u32>,
     background: bool,
 }
 
@@ -138,11 +135,8 @@ pub(super) fn show_controls(app: &AppHandle) {
         info.message = "已暂停。覆盖图中的空白尚未采集；可以继续移动后补齐。".into();
     }
     if let Ok(panel) = window(app, "scroll") {
-        let (x, y) = job
-            .safe_position
-            .unwrap_or((job.monitor.x + 8, job.monitor.y + 8));
-        let _ = panel.set_position(PhysicalPosition::new(x, y));
-        let _ = panel.set_size(job.panel_size);
+        let _ = panel.set_always_on_top(true);
+        let _ = panel.unminimize();
         let _ = panel.show();
         let _ = panel.set_focus();
     }
@@ -162,8 +156,7 @@ pub(super) fn start_scroll(
     validate_viewport(&window, width, height)?;
     let panel = self::window(&app, "scroll")?;
     let scale = window.scale_factor().map_err(|_| "无法读取显示器缩放。")?;
-    let panel_size = PhysicalSize::new((440. * scale).ceil() as u32, (374. * scale).ceil() as u32);
-    let (image, region, monitor, background, hotkey, safe_position) = {
+    let (image, region, background, hotkey, position, panel_size) = {
         let state = app.state::<AppState>();
         let data = state.lock();
         let capture = data
@@ -180,25 +173,41 @@ pub(super) fn start_scroll(
             height: rect.height,
             ..monitor.clone()
         };
-        let safe_position = controls_position(&monitor, &region, panel_size);
-        if safe_position.is_none() && !data.tray_available && data.active_hotkey.is_none() {
-            return Err("没有可用的结束快捷键或托盘，请缩小选区以留出控制窗口空间。".into());
-        }
+        let panel_size = PhysicalSize::new(
+            ((440. * scale).ceil() as u32).min(monitor.width),
+            ((374. * scale).ceil() as u32).min(monitor.height),
+        );
+        // Prefer a corner outside the selected region. Capture exclusion also
+        // allows the panel to stay visible when the selection fills the screen.
+        let position = controls_position(&monitor, &region, panel_size).unwrap_or((
+            monitor.x + monitor.width.saturating_sub(panel_size.width + 8) as i32,
+            monitor.y + 8.min(monitor.height.saturating_sub(panel_size.height)) as i32,
+        ));
         (
             rect.extract(&capture.image)?,
             region,
-            monitor,
             capture.background,
             data.active_hotkey
                 .clone()
                 .unwrap_or_else(|| "托盘菜单".into()),
-            safe_position,
+            position,
+            panel_size,
         )
     };
+    // Configure and verify exclusion before leaving selection mode. An OS error
+    // must not silently burn the controls (or a black rectangle) into the map.
+    unsafe {
+        platform::exclude_from_capture(panel.hwnd().map_err(|_| "无法访问控制窗口。")?.0)?;
+    }
+    panel
+        .set_position(PhysicalPosition::new(position.0, position.1))
+        .and_then(|_| panel.set_size(panel_size))
+        .and_then(|_| panel.set_always_on_top(true))
+        .map_err(|_| "无法准备滚动截图控制窗口。")?;
     window.hide().map_err(|_| "无法隐藏选区窗口。")?;
     // SAFETY: this live application window owns the handle.
     unsafe {
-        platform::hide_for_capture(window.hwnd().map_err(|_| "无法访问选区窗口。")?.0);
+        platform::hide_for_capture(window.hwnd().map_err(|_| "无法访问选区窗口。")?.0)?;
     }
     let rect = CoverageRect {
         x: 0,
@@ -231,9 +240,6 @@ pub(super) fn start_scroll(
         revision: AtomicU64::new(0),
         info: Mutex::new(info),
         region,
-        monitor,
-        safe_position,
-        panel_size,
         background,
     });
     {
@@ -242,19 +248,19 @@ pub(super) fn start_scroll(
         data.capture = None;
         data.scroll = Some(job.clone());
     }
-    if let Some((x, y)) = safe_position {
-        let _ = panel.set_position(PhysicalPosition::new(x, y));
-        let _ = panel.set_size(panel_size);
-        let _ = panel.show();
-    }
-    publish(&app, &job);
     let worker_app = app.clone();
     let worker_job = job.clone();
-    if std::thread::Builder::new()
-        .name("freecut-scroll".into())
-        .spawn(move || sample(worker_app, worker_job, image))
-        .is_err()
-    {
+    let started = panel
+        .show()
+        .map_err(|_| "无法显示滚动截图控制窗口。")
+        .and_then(|_| {
+            std::thread::Builder::new()
+                .name("freecut-scroll".into())
+                .spawn(move || sample(worker_app, worker_job, image))
+                .map(|_| ())
+                .map_err(|_| "无法启动采集线程，请重试。")
+        });
+    if let Err(error) = started {
         job.stopped.store(true, Ordering::Release);
         {
             let state = app.state::<AppState>();
@@ -264,8 +270,9 @@ pub(super) fn start_scroll(
         }
         let _ = panel.hide();
         show_main(&app);
-        return Err("无法启动采集线程，请重试。".into());
+        return Err(error.into());
     }
+    publish(&app, &job);
     Ok(())
 }
 
@@ -501,13 +508,9 @@ pub(super) fn pause_scroll(
     if job.info().id != id || job.finishing.load(Ordering::Acquire) {
         return Err("本次截图正在结束，请稍候。".into());
     }
-    if !paused && job.safe_position.is_none() {
-        window.hide().map_err(|_| "无法隐藏控制窗口。")?;
-        // SAFETY: the command window owns this handle; flush before resuming capture.
-        unsafe {
-            platform::hide_for_capture(window.hwnd().map_err(|_| "无法访问控制窗口。")?.0);
-        }
-    }
+    window
+        .set_always_on_top(true)
+        .map_err(|_| "无法置顶控制窗口。")?;
     job.generation.fetch_add(1, Ordering::AcqRel);
     job.paused.store(paused, Ordering::Release);
     {

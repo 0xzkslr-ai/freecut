@@ -5,11 +5,18 @@ use std::{
     mem::{size_of, zeroed},
     ptr::{null, null_mut},
 };
+use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
 use windows_sys::Win32::{
     Foundation::{GlobalFree, HWND, LPARAM, POINT, RECT},
-    Graphics::{Dwm::DwmFlush, Gdi::*},
-    System::{DataExchange::*, Memory::*},
-    UI::WindowsAndMessaging::{GetCursorPos, ShowWindow, SW_HIDE},
+    Graphics::{
+        Dwm::{DwmFlush, DwmIsCompositionEnabled},
+        Gdi::*,
+    },
+    System::{DataExchange::*, Memory::*, SystemInformation::OSVERSIONINFOW},
+    UI::WindowsAndMessaging::{
+        GetCursorPos, IsWindowVisible, SetWindowDisplayAffinity, ShowWindow, SW_HIDE,
+        WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+    },
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -94,11 +101,80 @@ pub fn cursor_monitor(monitors: &[Monitor]) -> Result<Monitor, String> {
 ///
 /// # Safety
 /// `hwnd` must identify a live window owned by the calling application.
-pub unsafe fn hide_for_capture(hwnd: HWND) {
+pub unsafe fn hide_for_capture(hwnd: HWND) -> Result<(), String> {
     // Synchronous hide + compositor flush, with no timer or artificial capture delay.
     unsafe {
         ShowWindow(hwnd, SW_HIDE);
-        DwmFlush();
+        if IsWindowVisible(hwnd) != 0 {
+            return Err("应用窗口尚未隐藏，请重试截图。".into());
+        }
+        if DwmFlush() < 0 {
+            return Err("无法同步桌面画面，请重试截图。".into());
+        }
+    }
+    Ok(())
+}
+
+fn capture_exclusion_supported() -> bool {
+    unsafe {
+        let mut version: OSVERSIONINFOW = zeroed();
+        version.dwOSVersionInfoSize = size_of::<OSVERSIONINFOW>() as u32;
+        RtlGetVersion(&mut version) >= 0
+            && (version.dwMajorVersion > 10
+                || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 19041))
+    }
+}
+
+/// Keep capture controls visible on the desktop but out of desktop screenshots.
+///
+/// # Safety
+/// `hwnd` must identify a live top-level window owned by the calling application.
+pub unsafe fn exclude_from_capture(hwnd: HWND) -> Result<(), String> {
+    unsafe {
+        // Older Windows accepts this affinity but renders a black rectangle instead.
+        if !capture_exclusion_supported() {
+            return Err("滚动截图的常驻控制窗需要 Windows 10 2004 或更新系统。".into());
+        }
+        let mut composition = 0;
+        if DwmIsCompositionEnabled(&mut composition) < 0 || composition == 0 {
+            return Err("无法从截图中排除控制窗，请启用 Windows 桌面合成后重试。".into());
+        }
+        if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0 {
+            return Err("无法从截图中排除控制窗，请重试滚动截图。".into());
+        }
+    }
+    Ok(())
+}
+
+/// Temporarily exclude the main window while taking a desktop snapshot.
+pub struct CaptureExclusion(HWND);
+
+impl CaptureExclusion {
+    /// # Safety
+    /// `hwnd` must be our live main window and remain valid until this guard is dropped.
+    /// Its normal display affinity must be `WDA_NONE`.
+    pub unsafe fn new(hwnd: HWND) -> Result<Self, String> {
+        // Normal captures still work on older Windows by minimizing and hiding;
+        // never apply the old black-rectangle protection mode as a fallback.
+        if !capture_exclusion_supported() {
+            return Ok(Self(null_mut()));
+        }
+        unsafe {
+            exclude_from_capture(hwnd)
+                .map_err(|_| "无法将主窗口从截图画面中排除，请重试。".to_string())?;
+        }
+        Ok(Self(hwnd))
+    }
+}
+
+impl Drop for CaptureExclusion {
+    fn drop(&mut self) {
+        // SAFETY: construction requires the application window to outlive the guard.
+        unsafe {
+            if !self.0.is_null() {
+                SetWindowDisplayAffinity(self.0, WDA_NONE);
+            }
+        }
     }
 }
 

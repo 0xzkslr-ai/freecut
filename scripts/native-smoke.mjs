@@ -131,6 +131,34 @@ try {
   await main.getByRole("button", { name: "开始截图", exact: true }).click();
   await untilVisible("overlay", true);
   await untilVisible("main", false);
+  // Check the original frozen pixels where the centered main window was shown.
+  // Window visibility alone cannot catch a stale compositor image of the app.
+  const frozenCenter = await overlay.evaluate(async () => {
+    const session = await window.__TAURI_INTERNALS__.invoke("current_session");
+    const source = new Image();
+    source.crossOrigin = "anonymous";
+    source.src = window.__TAURI_INTERNALS__.convertFileSrc(
+      `source-${session.id}`,
+      "freecut",
+    );
+    await source.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(
+      source,
+      Math.floor(source.naturalWidth / 2),
+      Math.floor(source.naturalHeight / 2),
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+    );
+    return [...ctx.getImageData(0, 0, 1, 1).data];
+  });
+  expect(frozenCenter).toEqual([18, 52, 86, 255]);
   await drawTriangle(overlay);
   await untilVisible("main", true);
   await untilVisible("overlay", false);

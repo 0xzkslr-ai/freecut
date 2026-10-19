@@ -6,7 +6,7 @@ use crate::{
 use serde::Serialize;
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{mpsc, Arc, Mutex, MutexGuard},
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -123,17 +123,52 @@ fn list_monitors() -> Result<Vec<Monitor>, String> {
     platform::monitors()
 }
 
+fn prepare_capture_windows(app: &AppHandle, monitor: &Monitor) -> Result<(), String> {
+    let scheduled = app.clone();
+    let monitor = monitor.clone();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            let main = window(&scheduled, "main")?;
+            let overlay = window(&scheduled, "overlay")?;
+            overlay.hide().map_err(|_| "无法隐藏选区窗口。")?;
+            // Window mutations execute together on their owning thread. The worker
+            // cannot read desktop pixels until this closure has finished.
+            overlay
+                .set_position(PhysicalPosition::new(monitor.x, monitor.y))
+                .map_err(|_| "无法定位选区窗口。")?;
+            overlay
+                .set_size(PhysicalSize::new(monitor.width, monitor.height))
+                .map_err(|_| "无法设置选区窗口尺寸。")?;
+            main.minimize().map_err(|_| "无法最小化主窗口。")?;
+            main.hide().map_err(|_| "无法隐藏主窗口。")?;
+            let hwnd = main.hwnd().map_err(|_| "无法访问主窗口。")?;
+            // SAFETY: this live Tauri main window owns the native handle.
+            unsafe { platform::hide_for_capture(hwnd.0) }
+        })();
+        let _ = sender.send(result);
+    })
+    .map_err(|_| "无法安排截图窗口切换，请重试。".to_string())?;
+    // Only the capture worker waits here; no app state lock is held.
+    receiver
+        .recv()
+        .map_err(|_| "截图窗口切换已中断，请重试。".to_string())?
+}
+
 fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), String> {
     let main = window(app, "main")?;
     let overlay = window(app, "overlay")?;
+    // Native window queries can dispatch to the event loop. Do not hold app
+    // state while waiting for them from the capture worker.
+    let main_in_background =
+        !main.is_visible().unwrap_or(true) || main.is_minimized().unwrap_or(false);
     let state = app.state::<AppState>();
     let (mode, background) = {
         let mut data = state.lock();
         if data.capturing || data.modal {
             return Ok(());
         }
-        let background = data.tray_available
-            && (!main.is_visible().unwrap_or(true) || main.is_minimized().unwrap_or(false));
+        let background = data.tray_available && main_in_background;
         data.capturing = true;
         (data.settings.mode, background)
     };
@@ -146,21 +181,14 @@ fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), Stri
                 .ok_or("所选显示器已断开，请重新选择。")?,
             None => platform::cursor_monitor(&monitors)?,
         };
-        overlay.hide().map_err(|_| "无法隐藏选区窗口。")?;
-        // Tauri uses per-monitor DPI awareness. These operations use physical desktop coordinates.
-        overlay
-            .set_position(PhysicalPosition::new(monitor.x, monitor.y))
-            .map_err(|_| "无法定位选区窗口。")?;
-        overlay
-            .set_size(PhysicalSize::new(monitor.width, monitor.height))
-            .map_err(|_| "无法设置选区窗口尺寸。")?;
         let hwnd = main.hwnd().map_err(|_| "无法访问主窗口。")?;
-        main.hide().map_err(|_| "无法隐藏主窗口。")?;
-        // SAFETY: the live Tauri main window owns this native handle.
-        unsafe {
-            platform::hide_for_capture(hwnd.0);
-        }
+        // Exclude before changing visibility so a stale compositor surface cannot
+        // put the main window into the frozen image. Restore on every exit path.
+        // SAFETY: the main application window outlives this synchronous worker scope.
+        let exclusion = unsafe { platform::CaptureExclusion::new(hwnd.0)? };
+        prepare_capture_windows(app, &monitor)?;
         let image = platform::capture(&monitor)?;
+        drop(exclusion);
         let png = Arc::new(image.png()?);
         let info = {
             let mut data = state.lock();
@@ -197,13 +225,31 @@ fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn start_capture(
+async fn start_capture(
     app: AppHandle,
     window: WebviewWindow,
     monitor_id: Option<String>,
 ) -> Result<(), String> {
     require(&window, "main")?;
-    begin_capture(&app, monitor_id)
+    capture_in_background(app, monitor_id).await
+}
+
+async fn capture_in_background(app: AppHandle, monitor_id: Option<String>) -> Result<(), String> {
+    // Keep the event loop free to apply window visibility changes before the
+    // desktop is read, and keep PNG encoding off the UI thread as well.
+    tauri::async_runtime::spawn_blocking(move || begin_capture(&app, monitor_id))
+        .await
+        .map_err(|_| "截图任务意外停止，请重试。".to_string())?
+}
+
+fn request_capture(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = capture_in_background(app.clone(), None).await {
+            let scheduled = app.clone();
+            let _ = app.run_on_main_thread(move || report_error(&scheduled, error));
+        }
+    });
 }
 
 #[tauri::command]
@@ -527,9 +573,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "capture" => {
-                if let Err(error) = begin_capture(app, None) {
-                    report_error(app, error);
-                }
+                request_capture(app);
             }
             "show" => {
                 if scrolling::active(app) {
@@ -602,13 +646,12 @@ pub fn run() {
                     let app = app.clone();
                     let scheduled = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        let result = if scrolling::active(&scheduled) {
-                            scrolling::finish(&scheduled)
+                        if scrolling::active(&scheduled) {
+                            if let Err(error) = scrolling::finish(&scheduled) {
+                                report_error(&scheduled, error);
+                            }
                         } else {
-                            begin_capture(&scheduled, None)
-                        };
-                        if let Err(error) = result {
-                            report_error(&scheduled, error);
+                            request_capture(&scheduled);
                         }
                     });
                 })

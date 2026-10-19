@@ -1,7 +1,7 @@
 import { backend, type ScrollInfo } from "./bridge";
 
 export async function mountScroll(root: HTMLElement) {
-  root.innerHTML = `<main class="scroll-panel"><div class="scroll-heading"><strong>滚动截图 <span id="scroll-state"></span></strong><span id="scroll-size"></span></div><canvas id="coverage-map" role="img" aria-label="地图采集覆盖范围"></canvas><p id="coverage-legend" class="muted small">绿色：已采集 · 线框：当前位置 · 棋盘格：尚未覆盖</p><p id="scroll-message" role="status">等待开始采集…</p><p id="scroll-hotkey" class="muted small"></p><div class="actions"><button id="scroll-cancel">取消</button><button id="scroll-pause">暂停</button><button id="scroll-finish" class="primary">结束并预览</button></div></main>`;
+  root.innerHTML = `<main class="scroll-panel"><div class="scroll-heading" data-tauri-drag-region title="拖动标题可移动控制窗"><strong data-tauri-drag-region>滚动截图 <span id="scroll-state" data-tauri-drag-region></span></strong><span id="scroll-size" data-tauri-drag-region></span></div><canvas id="coverage-map" role="img" aria-label="地图采集覆盖范围"></canvas><p id="coverage-legend" class="muted small">绿色：已采集 · 线框：当前位置 · 棋盘格：尚未覆盖</p><p id="scroll-message" role="status">等待开始采集…</p><p id="scroll-hotkey" class="muted small"></p><div class="actions"><button id="scroll-cancel">取消</button><button id="scroll-pause">暂停</button><button id="scroll-finish" class="primary">结束并预览</button></div></main>`;
   const get = <T extends HTMLElement>(id: string) =>
     root.querySelector<T>(`#${id}`)!;
   const pause = get<HTMLButtonElement>("scroll-pause");
@@ -58,7 +58,7 @@ export async function mountScroll(root: HTMLElement) {
       `${next.width} × ${next.height} px · ${next.frames} 帧`;
     get("scroll-message").textContent = next.message;
     get("scroll-hotkey").textContent =
-      `${next.hotkey} 结束 · 托盘「显示主窗口」可暂停并打开控制条`;
+      `${next.hotkey} 结束 · 拖动标题可移动控制窗`;
     pause.textContent = next.paused ? "继续采集" : "暂停";
     root.classList.toggle("scroll-paused", next.paused);
     root.classList.toggle("scroll-recovering", next.recovering);

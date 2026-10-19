@@ -44,6 +44,8 @@
         "decorations": false,
         "shadow": false,
         "resizable": false,
+        "minimizable": false,
+        "maximizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "backgroundColor": "#ffffff"

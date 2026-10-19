@@ -371,6 +371,7 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  cursor: move;
 }
 #scroll-size {
   font-size: 12px;

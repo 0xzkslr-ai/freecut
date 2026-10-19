@@ -100,6 +100,7 @@ try {
   await expect
     .poll(() => probeCall("visible", app.pid, "overlay"))
     .toBe("true");
+  expect(probeCall("visible", app.pid, "main")).toBe("false");
   const scale = await overlay.evaluate(() => devicePixelRatio);
   await overlay.mouse.move(100, 160);
   await overlay.mouse.down();
@@ -249,21 +250,17 @@ try {
       [0, size.height],
     ],
   });
-  await expect
-    .poll(() => probeCall("visible", app.pid, "scroll"))
-    .toBe("false");
+  await expect.poll(() => probeCall("visible", app.pid, "scroll")).toBe("true");
   const second = spawn(exe, [], { stdio: "ignore" });
   await once(second, "exit");
   await expect.poll(async () => (await state()).paused).toBe(true);
   await expect.poll(() => probeCall("visible", app.pid, "scroll")).toBe("true");
   await invoke(panel, "pause_scroll", { id: session.id, paused: false });
-  await expect
-    .poll(() => probeCall("visible", app.pid, "scroll"))
-    .toBe("false");
+  await expect.poll(() => probeCall("visible", app.pid, "scroll")).toBe("true");
   probeCall("post", app.pid, hotkey);
   await expect.poll(state).toBe(null);
   console.log(
-    "PASS full-monitor region hides controls; global shortcut still finishes",
+    "PASS full-monitor controls remain visible through resume; global shortcut finishes",
   );
   await restore();
   restore = async () => {};
