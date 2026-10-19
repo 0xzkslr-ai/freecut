@@ -2,7 +2,7 @@
   <img src="src-tauri/icons/128x128.png" width="80" height="80" alt="FreeCut 图标" />
   <h1>FreeCut</h1>
   <p><strong>让截图，自由一点。</strong></p>
-  <p>自由套索 · 多边形 · 矩形选取 · 透明 PNG</p>
+  <p>自由套索 · 多边形 · 矩形选取 · 滚动长截图 · 透明 PNG</p>
   <p>
     <a href="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml"><img src="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml/badge.svg" alt="构建与测试" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-087f73" alt="MIT License" /></a>
@@ -13,11 +13,11 @@
 
 FreeCut 是一款轻量级 Windows 截图工具。你可以像画画一样圈出想要的轮廓，
 逐点勾勒多边形，也可以直接框选矩形。选区之外的内容变为透明，结果可保存为 PNG
-或复制到剪贴板。
+或复制到剪贴板。矩形选区还支持滚动拼接：手动滚动页面或移动地图，将屏幕之外的内容逐步拼成大图。
 
-A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, transparent PNG export, global shortcuts and system tray support.
+A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, transparent PNG export, global shortcuts and system tray support.
 
-使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.61 MB**；
+使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.64 MB**；
 体积随编译版本变化，不包含系统 WebView2 Runtime。
 
 ## 功能
@@ -39,6 +39,28 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 - **再次裁剪**：拼接图或普通截图均可再次用套索、多边形、矩形裁剪，保留原始像素和透明区域。
 
 滚动拼接与再次裁剪是当前源码中的新增功能，已发布的 v0.2.0 尚未包含。
+
+## 截图效果
+
+以下是使用 FreeCut 实际导出的 PNG，点击图片可查看原图。
+
+| 自由套索 | 多边形 | 矩形选取 |
+| :---: | :---: | :---: |
+| [<img src="screenshots/lasso/FreeCut-1792423387.png" width="240" alt="自由套索截图：沿人物轮廓手绘选区" />](screenshots/lasso/FreeCut-1792423387.png) | [<img src="screenshots/polygon/FreeCut-1792423427.png" width="240" alt="多边形截图：逐点勾勒视频画面选区" />](screenshots/polygon/FreeCut-1792423427.png) | [<img src="screenshots/rectangle/FreeCut-1792423459.png" width="240" alt="矩形截图：框选视频画面" />](screenshots/rectangle/FreeCut-1792423459.png) |
+| 按住鼠标圈出想要的轮廓 | 逐点选择，保留多边形范围 | 拖动框选，快速截取矩形区域 |
+
+### 滚动长截图
+
+网页评论区的滚动拼接示例，原图为 **1286 × 4015 px**。矩形框定采集区域后，手动滚动页面，结束后得到完整拼接结果。
+
+<details>
+<summary>展开查看长截图</summary>
+
+[<img src="screenshots/scroll/FreeCut-1792423560.png" width="480" alt="滚动长截图：将网页评论区的多屏内容拼接成一张长图" />](screenshots/scroll/FreeCut-1792423560.png)
+
+</details>
+
+更多样例与分类说明见 [截图样例目录](screenshots/README.md)。
 
 ## 获取与运行
 
