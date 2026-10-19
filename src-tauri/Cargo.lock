@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "freecut"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "png 0.18.1",
  "rfd",
