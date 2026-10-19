@@ -1,3 +1,4 @@
+import argparse
 import sys
 
 from PySide6.QtCore import QEvent, QPointF, Qt
@@ -31,7 +32,10 @@ def app_icon() -> QIcon:
     return QIcon(pixmap)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="FreeCut · 自由形状截图")
+    parser.add_argument("--background", action="store_true", help="启动后隐藏到系统托盘")
+    arguments = parser.parse_args(argv)
     app = QApplication(sys.argv)
     app.setApplicationName("FreeCut")
     app.setApplicationVersion(__version__)
@@ -40,11 +44,18 @@ def main() -> int:
     app.setStyleSheet(STYLESHEET)
     app.setWindowIcon(app_icon())
     window = MainWindow()
-    window.show()
+    app.aboutToQuit.connect(window.shutdown)
+    if arguments.background and window.background_available:
+        window.hide_to_tray()
+    else:
+        window.show()
+        if arguments.background:
+            window.status_label.setText("当前桌面不支持系统托盘，已显示主窗口。")
     exit_code = app.exec()
     # Destroy widgets while QApplication and its screen objects still exist.
     # Python signal closures can otherwise keep the main window alive until
     # interpreter shutdown, after the platform plugin has already been unloaded.
+    window.shutdown()
     window.close()
     window.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

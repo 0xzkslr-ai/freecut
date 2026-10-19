@@ -13,11 +13,12 @@ from freecut.window import MainWindow
 
 
 @pytest.fixture
-def window(qapp):
-    widget = MainWindow()
+def window(qapp, desktop_environment):
+    widget = MainWindow(settings=desktop_environment.settings)
     widget.show()
     qapp.processEvents()
     yield widget
+    widget.shutdown()
     widget.close()
     shiboken6.delete(widget)
     qapp.processEvents()

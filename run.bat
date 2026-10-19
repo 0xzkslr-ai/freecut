@@ -18,8 +18,7 @@ goto run
 ".venv\Scripts\python.exe" -c "import PySide6; import freecut" >nul 2>nul
 if errorlevel 1 goto install
 :run
-".venv\Scripts\python.exe" -m freecut
-if errorlevel 1 goto fail
+start "" ".venv\Scripts\pythonw.exe" -m freecut %*
 exit /b 0
 :fail
 echo.

@@ -1,8 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, Qt, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QImage, QKeySequence
+from PySide6.QtCore import QSettings, QStandardPaths, Qt, QTimer
+from PySide6.QtGui import QAction, QCursor, QGuiApplication, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -10,16 +10,21 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
     QLayout,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStyle,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
+from freecut.hotkeys import DEFAULT_HOTKEY, GlobalHotkey, parse_hotkey
 from freecut.imaging import image_mime_data, save_png
 from freecut.overlay import SelectionOverlay
 from freecut.preview import Preview
@@ -27,7 +32,7 @@ from freecut.selection import Mode
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, settings: QSettings | None = None) -> None:
         super().__init__()
         self.setWindowTitle("FreeCut · 自由形状截图")
         self.resize(1040, 720)
@@ -36,6 +41,15 @@ class MainWindow(QMainWindow):
         self.image = QImage()
         self._capturing = False
         self._closing = False
+        self._return_to_background = False
+        self._settings = settings if settings is not None else QSettings("FreeCut", "FreeCut")
+        self._hotkey = GlobalHotkey(self)
+        self._hotkey.activated.connect(
+            self._capture_from_hotkey, Qt.ConnectionType.QueuedConnection
+        )
+        self._tray: QSystemTrayIcon | None = None
+        self._tray_capture_action: QAction | None = None
+        self._background_notified = False
         self._overlay: SelectionOverlay | None = None
         self._target_screen = None
         self._capture_timer = QTimer(self)
@@ -56,6 +70,9 @@ class MainWindow(QMainWindow):
         tagline.setObjectName("muted")
         header.addWidget(tagline)
         header.addStretch()
+        self.background_button = QPushButton("后台运行")
+        self.background_button.clicked.connect(self.hide_to_tray)
+        header.addWidget(self.background_button)
         badge = QLabel("本地运行 · 无需联网")
         badge.setObjectName("badge")
         header.addWidget(badge)
@@ -104,9 +121,24 @@ class MainWindow(QMainWindow):
         self.capture_button.clicked.connect(self._begin_capture)
         controls.addWidget(self.capture_button)
         controls.addWidget(self._label("Ctrl + Shift + A · 窗口内快捷键", "muted"))
+        controls.addWidget(self._label("全局截图快捷键", "section"))
+        hotkey_row = QHBoxLayout()
+        self.hotkey_edit = QKeySequenceEdit()
+        self.hotkey_edit.setAccessibleName("全局截图快捷键")
+        self.hotkey_edit.setMaximumSequenceLength(1)
+        self.hotkey_edit.setClearButtonEnabled(True)
+        self.hotkey_edit.setToolTip("点击后按下快捷键组合，再点击应用。")
+        hotkey_row.addWidget(self.hotkey_edit, 1)
+        self.hotkey_apply_button = QPushButton("应用")
+        self.hotkey_apply_button.clicked.connect(self._apply_hotkey)
+        hotkey_row.addWidget(self.hotkey_apply_button)
+        controls.addLayout(hotkey_row)
+        self.hotkey_status_label = self._label("", "muted")
+        self.hotkey_status_label.setWordWrap(True)
+        controls.addWidget(self.hotkey_status_label)
         controls.addStretch()
         hint = self._label(
-            "Enter 确认 · Esc 取消\n支持移动选区、调整多边形顶点。\n导出透明 PNG，保留原始像素。",
+            "Enter 确认 · Esc 取消",
             "muted",
         )
         hint.setWordWrap(True)
@@ -156,6 +188,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+Shift+A", self._begin_capture),
             ("Ctrl+S", self._save),
             ("Ctrl+C", self._copy),
+            ("Ctrl+Q", self.quit_application),
         ):
             action = QAction(self)
             action.setShortcut(QKeySequence(shortcut))
@@ -165,6 +198,130 @@ class MainWindow(QMainWindow):
         app = QGuiApplication.instance()
         app.screenAdded.connect(self._refresh_screens)
         app.screenRemoved.connect(self._refresh_screens)
+        self._setup_tray()
+        self._setup_hotkey()
+
+    @property
+    def background_available(self) -> bool:
+        return (
+            self._tray is not None
+            and self._tray.isVisible()
+            and QSystemTrayIcon.isSystemTrayAvailable()
+        )
+
+    def _setup_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.background_button.setEnabled(False)
+            self.background_button.setToolTip("当前桌面不支持系统托盘，关闭窗口将直接退出。")
+            return
+        icon = self.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon)
+        self._tray = QSystemTrayIcon(icon, self)
+        menu = QMenu(self)
+        self._tray_capture_action = menu.addAction("开始截图")
+        self._tray_capture_action.triggered.connect(self._capture_from_hotkey)
+        menu.addAction("显示主窗口", self.show_main_window)
+        menu.addSeparator()
+        menu.addAction("退出 FreeCut", self.quit_application)
+        self._tray.setContextMenu(menu)
+        self._tray.setToolTip("FreeCut · 自由形状截图")
+        self._tray.activated.connect(self._tray_activated)
+        self._tray.messageClicked.connect(self.show_main_window)
+        self._tray.show()
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        self.background_button.setToolTip("关闭主窗口也会隐藏到托盘；右键托盘图标可退出。")
+
+    def _setup_hotkey(self) -> None:
+        saved = self._settings.value("capture/hotkey", DEFAULT_HOTKEY, type=str)
+        try:
+            sequence = parse_hotkey(saved).text
+        except ValueError:
+            sequence = DEFAULT_HOTKEY
+        self.hotkey_edit.setKeySequence(QKeySequence(sequence))
+        if not self._hotkey.supported:
+            self.hotkey_edit.setEnabled(False)
+            self.hotkey_apply_button.setEnabled(False)
+            self.hotkey_status_label.setText("全局快捷键仅支持 Windows。")
+            return
+        self._apply_hotkey(persist=False)
+
+    def _apply_hotkey(self, checked: bool = False, *, persist: bool = True) -> None:
+        try:
+            sequence = self._hotkey.register(self.hotkey_edit.keySequence())
+        except (ValueError, OSError) as error:
+            previous = (
+                f" 原快捷键 {self._hotkey.sequence} 仍有效。" if self._hotkey.sequence else ""
+            )
+            self.hotkey_status_label.setText(str(error) + previous)
+            return
+        self.hotkey_status_label.setText(f"{sequence} · 在其他应用中也能截图")
+        self.capture_button.setToolTip(f"全局 {sequence}；窗口内 Ctrl+Shift+A")
+        if self._tray_capture_action is not None:
+            self._tray_capture_action.setText(f"开始截图  {sequence}")
+            self._tray.setToolTip(f"FreeCut · {sequence} 截图")
+        if persist:
+            self._settings.setValue("capture/hotkey", sequence)
+            self._settings.sync()
+            if self._settings.status() != QSettings.Status.NoError:
+                self.hotkey_status_label.setText(f"{sequence} 已生效，但设置保存失败。")
+
+    def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.show_main_window()
+
+    def hide_to_tray(self) -> bool:
+        if self._closing or self._capturing or not self.background_available:
+            return False
+        self.hide()
+        if not self._background_notified:
+            self._background_notified = True
+            shortcut = self._hotkey.sequence
+            tip = f"按 {shortcut} 直接截图。" if shortcut else "右键托盘图标可开始截图。"
+            self._tray.showMessage("FreeCut 正在后台运行", tip + " 右键菜单可退出。")
+        return True
+
+    def show_main_window(self) -> None:
+        if self._closing or self._capturing:
+            return
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _capture_from_hotkey(self) -> None:
+        if self._closing or self._capturing or QApplication.activeModalWidget() is not None:
+            return
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        # A background hotkey targets the monitor under the pointer. The capture
+        # button continues to honor the explicit monitor selected in the UI.
+        if screen is not None:
+            for index in range(self.screen_combo.count()):
+                if self.screen_combo.itemData(index) is screen:
+                    self.screen_combo.setCurrentIndex(index)
+                    break
+        self._begin_capture(from_background=not self.isActiveWindow())
+
+    def shutdown(self) -> None:
+        """Release background resources before QApplication destroys the platform backend."""
+        if self._closing:
+            return
+        self._closing = True
+        self._capture_timer.stop()
+        self._hotkey.close()
+        if self._tray is not None:
+            self._tray.hide()
+        if self._overlay is not None:
+            self._overlay.close()
+        self._overlay = None
+        self._target_screen = None
+        self._capturing = False
+
+    def quit_application(self) -> None:
+        self.shutdown()
+        self.close()
 
     @staticmethod
     def _label(text: str, name: str) -> QLabel:
@@ -188,7 +345,7 @@ class MainWindow(QMainWindow):
                 self.screen_combo.setCurrentIndex(index)
         self.capture_button.setEnabled(not self._capturing and self.screen_combo.count() > 0)
 
-    def _begin_capture(self) -> None:
+    def _begin_capture(self, checked: bool = False, *, from_background: bool = False) -> None:
         if self._capturing or self._closing:
             return
         self._target_screen = self.screen_combo.currentData()
@@ -196,6 +353,9 @@ class MainWindow(QMainWindow):
             self._show_error("当前没有可截取的屏幕。")
             return
         self._capturing = True
+        self._return_to_background = self.background_available and (
+            from_background or not self.isVisible() or self.isMinimized()
+        )
         self.capture_button.setEnabled(False)
         self.hide()
         self._capture_timer.start(self.delay_combo.currentData())
@@ -218,18 +378,17 @@ class MainWindow(QMainWindow):
             self._overlay.activateWindow()
             self._overlay.setFocus()
         except RuntimeError as error:
-            self._restore()
+            self._restore(show_window=True)
             self._show_error(str(error))
 
-    def _restore(self) -> None:
+    def _restore(self, *, show_window: bool = True) -> None:
         self._capturing = False
         self._overlay = None
         self._target_screen = None
         if not self._closing:
             self._refresh_screens()
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            if show_window or not self.background_available:
+                self.show_main_window()
 
     def _on_capture(self, image: QImage) -> None:
         self.image = image.copy()
@@ -238,11 +397,11 @@ class MainWindow(QMainWindow):
         self.copy_button.setEnabled(True)
         self.save_button.setEnabled(True)
         self.status_label.setText("截图完成 · 可以复制图片，或保存为透明 PNG。")
-        self._restore()
+        self._restore(show_window=True)
 
     def _on_cancel(self) -> None:
         self.status_label.setText("已取消本次截图。")
-        self._restore()
+        self._restore(show_window=not self._return_to_background)
 
     def _copy(self) -> None:
         if self.image.isNull():
@@ -287,8 +446,9 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "FreeCut", message)
 
     def closeEvent(self, event) -> None:
-        self._closing = True
-        self._capture_timer.stop()
-        if self._overlay is not None:
-            self._overlay.close()
+        if not self._closing and self.hide_to_tray():
+            event.ignore()
+            return
+        self.shutdown()
         event.accept()
+        QApplication.instance().quit()

@@ -18,17 +18,26 @@ from freecut.window import MainWindow
     os.environ.get("FREECUT_NATIVE_TEST") != "1", reason="Requires an isolated Xvfb display"
 )
 @pytest.mark.parametrize("mode", [Mode.LASSO, Mode.POLYGON])
-def test_real_screen_pixels_through_selection_to_png(qapp, tmp_path, mode):
+@pytest.mark.parametrize("from_background", [False, True])
+def test_real_screen_pixels_through_selection_to_png(
+    qapp, tmp_path, mode, from_background, desktop_environment
+):
+    desktop_environment.supported = from_background
+    desktop_environment.tray_available = from_background
     background = QWidget()
     background.setStyleSheet("background: #e56537;")
     background.setGeometry(QGuiApplication.primaryScreen().geometry())
     background.show()
-    window = MainWindow()
+    window = MainWindow(settings=desktop_environment.settings)
     window.show()
     try:
         window._mode_group.button(list(Mode).index(mode)).click()
         QTest.qWait(100)
-        window.capture_button.click()
+        if from_background:
+            window.hide_to_tray()
+            window._hotkey.activated.emit()
+        else:
+            window.capture_button.click()
         QTest.qWait(650)
         overlay = window._overlay
         assert overlay is not None
@@ -54,12 +63,17 @@ def test_real_screen_pixels_through_selection_to_png(qapp, tmp_path, mode):
         window.copy_button.click()
         assert qapp.clipboard().mimeData().hasFormat("image/png")
         previous = window.image.copy()
-        window.capture_button.click()
+        if from_background:
+            window.hide_to_tray()
+            window._hotkey.activated.emit()
+        else:
+            window.capture_button.click()
         QTest.qWait(650)
         QTest.keyClick(window._overlay, Qt.Key.Key_Escape)
-        assert window.isVisible()
+        assert window.isVisible() == (not from_background)
         assert window.image == previous
     finally:
+        window.shutdown()
         window.close()
         background.close()
         shiboken6.delete(window)

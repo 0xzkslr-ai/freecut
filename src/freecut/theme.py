@@ -45,6 +45,14 @@ QComboBox {{
     min-height: 20px; background: white;
 }}
 QComboBox QAbstractItemView {{ background: white; selection-background-color: #d8eee8; }}
+QKeySequenceEdit QLineEdit {{
+    border: 1px solid {BORDER}; border-radius: 6px;
+    padding: 6px; min-height: 24px; background: white;
+}}
+QKeySequenceEdit QLineEdit:focus {{ border: 2px solid {PRIMARY}; }}
+QMenu {{ background: white; border: 1px solid {BORDER}; padding: 5px; }}
+QMenu::item {{ padding: 8px 20px; border-radius: 4px; }}
+QMenu::item:selected {{ background: #e7f5ef; }}
 QStatusBar {{ background: {BACKGROUND}; color: {MUTED}; }}
 QToolTip {{ background: {TEXT}; color: white; border: 0; padding: 6px; }}
 """
