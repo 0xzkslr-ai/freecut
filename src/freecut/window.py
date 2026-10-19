@@ -73,9 +73,6 @@ class MainWindow(QMainWindow):
         self.background_button = QPushButton("后台运行")
         self.background_button.clicked.connect(self.hide_to_tray)
         header.addWidget(self.background_button)
-        badge = QLabel("本地运行 · 无需联网")
-        badge.setObjectName("badge")
-        header.addWidget(badge)
         layout.addLayout(header)
 
         body = QHBoxLayout()

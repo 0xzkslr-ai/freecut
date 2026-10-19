@@ -22,7 +22,6 @@ QLabel#brand {{ font-size: 26px; font-weight: 700; }}
 QLabel#heading {{ font-size: 22px; font-weight: 600; }}
 QLabel#section {{ font-size: 14px; font-weight: 600; }}
 QLabel#muted, QLabel#status {{ color: {MUTED}; }}
-QLabel#badge {{ color: {PRIMARY}; background: #e4f4ef; border-radius: 10px; padding: 5px 10px; }}
 QPushButton {{
     background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 8px;
     padding: 10px 16px; min-height: 20px;
