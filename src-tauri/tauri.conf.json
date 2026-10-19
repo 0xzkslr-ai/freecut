@@ -33,6 +33,20 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "backgroundColor": "#172b35"
+      },
+      {
+        "label": "scroll",
+        "url": "index.html?scroll",
+        "title": "FreeCut · 滚动截图",
+        "width": 440,
+        "height": 260,
+        "visible": false,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#ffffff"
       }
     ],
     "security": {

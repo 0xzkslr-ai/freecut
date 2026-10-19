@@ -16,6 +16,71 @@ mod native {
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain([0]).collect()
     }
+    static MAP_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    static MAP_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    unsafe extern "system" fn map_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        use std::sync::atomic::Ordering;
+        if msg == WM_APP {
+            MAP_X.store(wparam as i32, Ordering::Relaxed);
+            MAP_Y.store(lparam as i32, Ordering::Relaxed);
+            InvalidateRect(hwnd, null(), 0);
+            UpdateWindow(hwnd);
+            return 0;
+        }
+        if msg == WM_PAINT {
+            let mut paint: PAINTSTRUCT = zeroed();
+            let dc = BeginPaint(hwnd, &mut paint);
+            let mut rect: RECT = zeroed();
+            GetClientRect(hwnd, &mut rect);
+            let (w, h) = (rect.right, rect.bottom);
+            let (offset_x, offset_y) =
+                (MAP_X.load(Ordering::Relaxed), MAP_Y.load(Ordering::Relaxed));
+            let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+            for y in offset_y..offset_y + h {
+                for x in offset_x..offset_x + w {
+                    let mut n = (x.div_euclid(11) as u32).wrapping_mul(0x45d9f3b)
+                        ^ (y.div_euclid(13) as u32).wrapping_mul(0x119de1f3);
+                    n = (n ^ (n >> 16)).wrapping_mul(0x45d9f3b);
+                    let detail = (x * 17 + y * 29).rem_euclid(29) as u8;
+                    pixels.extend_from_slice(&[
+                        ((n >> 16) as u8 / 2) + detail,
+                        ((n >> 8) as u8 / 2) + detail,
+                        (n as u8 / 2) + detail,
+                        255,
+                    ]);
+                }
+            }
+            let mut info: BITMAPINFO = zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = w;
+            info.bmiHeader.biHeight = -h;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            SetDIBitsToDevice(
+                dc,
+                0,
+                0,
+                w as u32,
+                h as u32,
+                0,
+                0,
+                0,
+                h as u32,
+                pixels.as_ptr().cast(),
+                &info,
+                DIB_RGB_COLORS,
+            );
+            EndPaint(hwnd, &paint);
+            return 0;
+        }
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
     struct Search {
         pid: u32,
         class: Option<String>,
@@ -111,7 +176,7 @@ mod native {
                     }
                     println!("{pid}");
                 }
-                "fixture" => {
+                "fixture" | "map-fixture" => {
                     SetProcessDpiAwarenessContext(
                         windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
                     );
@@ -119,7 +184,11 @@ mod native {
                     let instance = GetModuleHandleW(null());
                     let brush = CreateSolidBrush(0x00563412);
                     let class = WNDCLASSW {
-                        lpfnWndProc: Some(DefWindowProcW),
+                        lpfnWndProc: Some(if args[1] == "map-fixture" {
+                            map_proc
+                        } else {
+                            DefWindowProcW
+                        }),
                         hInstance: instance,
                         lpszClassName: name.as_ptr(),
                         hbrBackground: brush,
@@ -127,7 +196,11 @@ mod native {
                     };
                     RegisterClassW(&class);
                     let hwnd = CreateWindowExW(
-                        0,
+                        if args[1] == "map-fixture" {
+                            WS_EX_TOPMOST
+                        } else {
+                            0
+                        },
                         name.as_ptr(),
                         wide("FreeCut native test pattern").as_ptr(),
                         WS_POPUP | WS_VISIBLE,
@@ -168,6 +241,21 @@ mod native {
                     );
                     println!("posted");
                 }
+                "map-move" => {
+                    let hwnd = find_window(
+                        args[2].parse().unwrap(),
+                        Some("FreeCutNativeTestPattern"),
+                        None,
+                    );
+                    assert!(!hwnd.is_null(), "map fixture missing");
+                    SendMessageW(
+                        hwnd,
+                        WM_APP,
+                        args[3].parse::<i32>().unwrap() as usize,
+                        args[4].parse::<i32>().unwrap() as isize,
+                    );
+                    println!("moved");
+                }
                 "check" | "reserve" => {
                     let (_, mods, vk) = binding(&args[2]);
                     let registered =
@@ -185,6 +273,8 @@ mod native {
                 "visible" => {
                     let title = if args[3] == "overlay" {
                         "FreeCut · 选择截图区域"
+                    } else if args[3] == "scroll" {
+                        "FreeCut · 滚动截图"
                     } else {
                         "FreeCut · 自由形状截图"
                     };

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-async function mockDesktop(page: Page, overlay = false) {
+async function mockDesktop(page: Page, overlay: boolean | "scroll" = false) {
   await page.addInitScript(
     ({ overlay }) => {
       const win = window as any;
@@ -65,6 +65,29 @@ async function mockDesktop(page: Page, overlay = false) {
             return args.hotkey;
           }
           if (cmd === "save_image") return "C:\\test\\截图.png";
+          if (cmd === "start_scroll" && win.rejectScroll)
+            throw "采集区域过小，请重新框选。";
+          if (cmd === "scroll_state")
+            return {
+              id: 7,
+              width: 1200,
+              height: 900,
+              frames: 4,
+              paused: false,
+              message: "正在拼接",
+              hotkey: "Ctrl+Alt+A",
+            };
+          if (cmd === "pause_scroll") {
+            win.send("scroll-progress", {
+              id: 7,
+              width: 1200,
+              height: 900,
+              frames: 4,
+              paused: args.paused,
+              message: args.paused ? "已暂停" : "正在拼接",
+              hotkey: "Ctrl+Alt+A",
+            });
+          }
           if (cmd === "accept_capture") {
             if (win.rejectCrop) throw "选区太小，请重新圈选。";
             return { id: 7, width: 400, height: 400 };
@@ -81,13 +104,21 @@ async function mockDesktop(page: Page, overlay = false) {
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="2080" height="1440"><rect width="2080" height="1440" fill="#e7f5ef"/><rect x="200" y="200" width="500" height="400" fill="#087f73"/></svg>',
     }),
   );
-  await page.goto(overlay ? "/?overlay" : "/");
+  await page.goto(
+    overlay === "scroll" ? "/?scroll" : overlay ? "/?overlay" : "/",
+  );
   await expect
     .poll(() =>
       page.evaluate(
         (overlay) =>
           (window as any).calls.some(
-            (c: any) => c.cmd === (overlay ? "show_overlay" : "frontend_ready"),
+            (c: any) =>
+              c.cmd ===
+              (overlay === "scroll"
+                ? "scroll_state"
+                : overlay
+                  ? "show_overlay"
+                  : "frontend_ready"),
           ),
         overlay,
       ),
@@ -128,6 +159,117 @@ test("main flow, tools, capture, preview, save and clipboard", async ({
   expect(await commands(page, "hide_to_tray")).toHaveLength(1);
   await page.keyboard.press("Control+q");
   expect(await commands(page, "quit_app")).toHaveLength(1);
+});
+
+test("scroll capture is offered only for a closed rectangle and sends the selected region", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 200);
+  await page.mouse.move(200, 450);
+  await page.mouse.up();
+  await expect(page.locator("#scroll-capture")).toBeHidden();
+  await page.keyboard.press("KeyM");
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 450);
+  await page.mouse.up();
+  await expect(page.locator("#scroll-capture")).toBeVisible();
+  await page.evaluate(() => ((window as any).rejectScroll = true));
+  await page.locator("#scroll-capture").click();
+  await expect(page.locator("#hint")).toContainText("采集区域过小");
+  await expect(page.locator("#scroll-capture")).toBeEnabled();
+  await page.evaluate(() => ((window as any).rejectScroll = false));
+  await page.locator("#scroll-capture").click();
+  expect((await commands(page, "start_scroll"))[1].args.points).toEqual([
+    [200, 200],
+    [500, 200],
+    [500, 450],
+    [200, 450],
+  ]);
+  expect(await commands(page, "accept_capture")).toHaveLength(0);
+});
+
+test("scroll controls show progress, pause, resume and finish", async ({
+  page,
+}) => {
+  await mockDesktop(page, "scroll");
+  await expect(page.locator("#scroll-size")).toHaveText("1200 × 900 px · 4 帧");
+  await expect(page.locator("#scroll-hotkey")).toContainText("Ctrl+Alt+A");
+  await page.getByRole("button", { name: "暂停", exact: true }).click();
+  await expect(page.locator("#scroll-message")).toHaveText("已暂停");
+  await page.getByRole("button", { name: "继续采集", exact: true }).click();
+  expect(
+    (await commands(page, "pause_scroll")).map((call: any) => call.args.paused),
+  ).toEqual([true, false]);
+  await page.evaluate(() =>
+    (window as any).send("scroll-progress", {
+      id: 7,
+      width: 2000,
+      height: 1500,
+      frames: 8,
+      paused: true,
+      message: "无法可靠对齐，已暂停",
+      hotkey: "Ctrl+Alt+A",
+    }),
+  );
+  await expect(page.locator("#scroll-message")).toContainText("无法可靠对齐");
+  await page.getByRole("button", { name: "结束并预览", exact: true }).click();
+  expect((await commands(page, "finish_scroll"))[0].args.id).toBe(7);
+  await page.evaluate(() => (window as any).send("scroll-ended", null));
+  await page.getByRole("button", { name: "结束并预览", exact: true }).click();
+  expect(await commands(page, "finish_scroll")).toHaveLength(1);
+});
+
+test("cancel discards scrolling and a preview can be reopened for cropping", async ({
+  page,
+}) => {
+  await mockDesktop(page, "scroll");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  expect((await commands(page, "cancel_scroll"))[0].args.id).toBe(7);
+  await page.goto("/");
+  await expect(page.locator("#edit")).toBeDisabled();
+  await page.evaluate(() =>
+    (window as any).send("preview-changed", {
+      id: 9,
+      width: 10000,
+      height: 1000,
+    }),
+  );
+  await page.getByRole("button", { name: "再次裁剪", exact: true }).click();
+  expect(await commands(page, "edit_result")).toHaveLength(1);
+});
+
+test("a stitched image fits the crop window and maps its selection without stretching", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.evaluate(() =>
+    (window as any).send("capture-started", {
+      id: 9,
+      width: 10000,
+      height: 1000,
+      mode: "rectangle",
+      crop: true,
+    }),
+  );
+  await expect
+    .poll(async () => (await commands(page, "show_overlay")).length)
+    .toBe(2);
+  // 10000 × 1000 is fitted to 992 × 99.2 at (24, 310.4).
+  await page.mouse.move(24, 310.4);
+  await page.mouse.down();
+  await page.mouse.move(520, 409.6);
+  await page.mouse.up();
+  await expect(page.locator("#selection-size")).toHaveText("约 5000 × 1000 px");
+  await expect(page.locator("#scroll-capture")).toBeHidden();
+  await page.keyboard.press("Enter");
+  const points = (await commands(page, "accept_capture"))[0].args.points;
+  expect(points[0][0]).toBeCloseTo(0);
+  expect(points[2][0]).toBeCloseTo(520);
+  expect(points[2][1]).toBeCloseTo(720);
 });
 test("rectangle tool is selected and persisted through the backend", async ({
   page,

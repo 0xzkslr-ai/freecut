@@ -16,6 +16,7 @@ export interface Session {
   width: number;
   height: number;
   mode: Mode;
+  crop?: boolean;
 }
 export interface Preview {
   id: number;
@@ -24,6 +25,15 @@ export interface Preview {
 }
 export interface Settings {
   mode: Mode;
+  hotkey: string;
+}
+export interface ScrollInfo {
+  id: number;
+  width: number;
+  height: number;
+  frames: number;
+  paused: boolean;
+  message: string;
   hotkey: string;
 }
 export interface InitialState {
@@ -47,6 +57,14 @@ export const backend = {
   cancel: (id: number) => invoke<void>("cancel_capture", { id }),
   accept: (id: number, points: Point[], width: number, height: number) =>
     invoke<Preview>("accept_capture", { id, points, width, height }),
+  scroll: (id: number, points: Point[], width: number, height: number) =>
+    invoke<void>("start_scroll", { id, points, width, height }),
+  scrollState: () => invoke<ScrollInfo | null>("scroll_state"),
+  pauseScroll: (id: number, paused: boolean) =>
+    invoke<void>("pause_scroll", { id, paused }),
+  finishScroll: (id: number) => invoke<void>("finish_scroll", { id }),
+  cancelScroll: (id: number) => invoke<void>("cancel_scroll", { id }),
+  edit: () => invoke<void>("edit_result"),
   mode: (mode: Mode) => invoke<void>("set_mode", { mode }),
   hotkey: (hotkey: string) => invoke<string>("set_hotkey", { hotkey }),
   copy: () => invoke<void>("copy_image"),

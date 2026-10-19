@@ -1,13 +1,15 @@
 import { backend, imageUrl, type Session } from "./bridge";
 import { Selection, bounds, clampPoint, type Point } from "./selection";
+import { imageViewport, viewportPoints } from "./viewport";
 
 export async function mountOverlay(root: HTMLElement) {
-  root.innerHTML = `<canvas id="selection-canvas" aria-label="截图选区画布"></canvas><p id="hint" class="overlay-hint" role="status"></p><div id="selection-toolbar" class="selection-toolbar" hidden><span id="selection-size"></span><button id="reset">重选&nbsp; R</button><button id="cancel">取消&nbsp; Esc</button><button id="accept" class="primary">确认&nbsp; Enter</button></div>`;
+  root.innerHTML = `<canvas id="selection-canvas" aria-label="截图选区画布"></canvas><p id="hint" class="overlay-hint" role="status"></p><div id="selection-toolbar" class="selection-toolbar" hidden><span id="selection-size"></span><button id="reset">重选&nbsp; R</button><button id="cancel">取消&nbsp; Esc</button><button id="scroll-capture" hidden>滚动截图</button><button id="accept" class="primary">确认&nbsp; Enter</button></div>`;
   const canvas = root.querySelector<HTMLCanvasElement>("canvas")!;
   const ctx = canvas.getContext("2d", { alpha: false })!;
   const hint = root.querySelector<HTMLParagraphElement>("#hint")!;
   const toolbar = root.querySelector<HTMLDivElement>("#selection-toolbar")!;
   const accept = root.querySelector<HTMLButtonElement>("#accept")!;
+  const scroll = root.querySelector<HTMLButtonElement>("#scroll-capture")!;
   const selection = new Selection();
   let image: HTMLImageElement | null = null;
   let session: Session | null = null;
@@ -16,20 +18,33 @@ export async function mountOverlay(root: HTMLElement) {
   let resolving = false;
   let raf = 0;
   let message = "";
+  const viewport = () =>
+    imageViewport(
+      innerWidth,
+      innerHeight,
+      session?.width ?? innerWidth,
+      session?.height ?? innerHeight,
+      !!session?.crop,
+    );
 
   function draw() {
     raf = 0;
-    const width = innerWidth,
-      height = innerHeight,
+    const view = viewport();
+    const width = view.width,
+      height = view.height,
       dpr = devicePixelRatio;
-    const pw = Math.round(width * dpr),
-      ph = Math.round(height * dpr);
+    const pw = Math.round(innerWidth * dpr),
+      ph = Math.round(innerHeight * dpr);
     if (canvas.width !== pw || canvas.height !== ph) {
       canvas.width = pw;
       canvas.height = ph;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#172b35";
+    ctx.fillRect(0, 0, innerWidth, innerHeight);
+    ctx.translate(view.x, view.y);
+    ctx.fillStyle = "#e3e9ec";
+    ctx.fillRect(0, 0, width, height);
     if (image) ctx.drawImage(image, 0, 0, width, height);
     const path = new Path2D();
     selection.points.forEach(([x, y], i) =>
@@ -79,7 +94,7 @@ export async function mountOverlay(root: HTMLElement) {
     hint.textContent =
       message ||
       (selection.complete
-        ? `拖动选区移动位置${selection.mode === "polygon" ? " · 拖动顶点调整轮廓" : selection.mode === "rectangle" ? " · 拖动角点调整大小" : ""}  |  Enter 确认 · R 重选 · Tab 隐藏提示 · Esc 取消`
+        ? `拖动选区移动位置${selection.mode === "polygon" ? " · 拖动顶点调整轮廓" : selection.mode === "rectangle" ? " · 拖动角点调整大小" : ""}  |  Enter 确认 · R 重选 · Tab 隐藏提示 · Esc 取消${selection.mode === "rectangle" && !session?.crop ? "\n滚动截图：手动移动地图，按全局截图键结束；控制条无空位时收起到托盘。" : ""}`
         : selection.mode === "lasso"
           ? "自由套索：按住左键绘制，松开闭合  |  P 多边形 · M 矩形 · Tab 隐藏提示 · Esc 取消"
           : selection.mode === "rectangle"
@@ -87,6 +102,7 @@ export async function mountOverlay(root: HTMLElement) {
             : "多边形：单击添加顶点，点击起点 / 双击 / Enter 闭合\n右键 / Backspace / Ctrl+Z 撤销 · L 套索 · M 矩形 · Tab 隐藏提示 · Esc 取消");
     hint.hidden = !hudVisible;
     toolbar.hidden = !selection.complete || !hudVisible;
+    scroll.hidden = selection.mode !== "rectangle" || !!session?.crop;
     const b = bounds(selection.points);
     root.querySelector("#selection-size")!.textContent =
       `约 ${Math.round((b.width * (session?.width ?? width)) / width)} × ${Math.round((b.height * (session?.height ?? height)) / height)} px`;
@@ -100,7 +116,12 @@ export async function mountOverlay(root: HTMLElement) {
     render();
   }
   function point(event: PointerEvent): Point {
-    return clampPoint([event.clientX, event.clientY], innerWidth, innerHeight);
+    const view = viewport();
+    return clampPoint(
+      [event.clientX - view.x, event.clientY - view.y],
+      view.width,
+      view.height,
+    );
   }
   async function cancel() {
     if (!session || resolving) return;
@@ -117,7 +138,7 @@ export async function mountOverlay(root: HTMLElement) {
       resolving = false;
     }
   }
-  async function confirm() {
+  async function confirm(scrolling = false) {
     if (!session || resolving) return;
     if (!selection.complete) {
       if (!selection.finish())
@@ -129,11 +150,18 @@ export async function mountOverlay(root: HTMLElement) {
       return;
     }
     resolving = true;
-    accept.disabled = true;
+    accept.disabled = scroll.disabled = true;
     try {
-      await backend.accept(
+      const view = viewport();
+      await (scrolling ? backend.scroll : backend.accept)(
         session.id,
-        selection.points,
+        viewportPoints(
+          selection.points,
+          view.width,
+          view.height,
+          innerWidth,
+          innerHeight,
+        ),
         innerWidth,
         innerHeight,
       );
@@ -145,7 +173,7 @@ export async function mountOverlay(root: HTMLElement) {
       render();
     } finally {
       resolving = false;
-      accept.disabled = false;
+      accept.disabled = scroll.disabled = false;
     }
   }
   canvas.onpointerdown = (event) => {
@@ -157,6 +185,14 @@ export async function mountOverlay(root: HTMLElement) {
       return;
     }
     if (event.button !== 0) return;
+    const view = viewport();
+    if (
+      event.clientX < view.x - 0.5 ||
+      event.clientY < view.y - 0.5 ||
+      event.clientX > view.x + view.width + 0.5 ||
+      event.clientY > view.y + view.height + 0.5
+    )
+      return;
     canvas.setPointerCapture(event.pointerId);
     cursor = point(event);
     message = "";
@@ -168,12 +204,12 @@ export async function mountOverlay(root: HTMLElement) {
     cursor = point(event);
     const events = event.getCoalescedEvents?.() ?? [event];
     for (const sample of events.length ? events : [event])
-      selection.move(point(sample), innerWidth, innerHeight);
+      selection.move(point(sample), viewport().width, viewport().height);
     render();
   };
   canvas.onpointerup = (event) => {
     if (!session || resolving || event.button !== 0) return;
-    selection.up(point(event), innerWidth, innerHeight);
+    selection.up(point(event), viewport().width, viewport().height);
     if (canvas.hasPointerCapture(event.pointerId))
       canvas.releasePointerCapture(event.pointerId);
     if (selection.mode !== "polygon" && !selection.complete)
@@ -195,6 +231,7 @@ export async function mountOverlay(root: HTMLElement) {
   root.querySelector<HTMLButtonElement>("#cancel")!.onclick = () =>
     void cancel();
   accept.onclick = () => void confirm();
+  scroll.onclick = () => void confirm(true);
   window.addEventListener("keydown", (event) => {
     if (resolving) return;
     if (

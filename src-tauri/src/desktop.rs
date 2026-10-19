@@ -13,18 +13,23 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+#[path = "scrolling.rs"]
+mod scrolling;
+
 #[derive(Clone, Serialize)]
 struct SessionInfo {
     id: u64,
     width: u32,
     height: u32,
     mode: Mode,
+    crop: bool,
 }
 struct Capture {
     info: SessionInfo,
     image: Image,
     png: Arc<Vec<u8>>,
     background: bool,
+    monitor: Option<Monitor>,
 }
 struct ResultImage {
     info: Preview,
@@ -42,6 +47,7 @@ struct Data {
     next_id: u64,
     capture: Option<Capture>,
     result: Option<ResultImage>,
+    scroll: Option<Arc<scrolling::Job>>,
 }
 struct AppState(Mutex<Data>);
 impl AppState {
@@ -164,12 +170,14 @@ fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), Stri
                 width: image.width,
                 height: image.height,
                 mode,
+                crop: false,
             };
             data.capture = Some(Capture {
                 info: info.clone(),
                 image,
                 png,
                 background,
+                monitor: Some(monitor),
             });
             info
         };
@@ -268,13 +276,7 @@ fn accept_capture(
 ) -> Result<Preview, String> {
     require(&window, "overlay")?;
     // The viewport is measured by WebView, rather than assuming a particular Windows scaling factor.
-    let viewport = window.inner_size().map_err(|_| "无法读取选区窗口尺寸。")?;
-    let scale = window.scale_factor().map_err(|_| "无法读取显示器缩放。")?;
-    if ((width * scale) - viewport.width as f64).abs() > 2.
-        || ((height * scale) - viewport.height as f64).abs() > 2.
-    {
-        return Err("显示器缩放已改变，请取消后重新截图。".into());
-    }
+    validate_viewport(&window, width, height)?;
     let state = app.state::<AppState>();
     let info = {
         let mut data = state.lock();
@@ -306,6 +308,66 @@ fn accept_capture(
     Ok(info)
 }
 
+fn validate_viewport(window: &WebviewWindow, width: f64, height: f64) -> Result<(), String> {
+    let viewport = window.inner_size().map_err(|_| "无法读取选区窗口尺寸。")?;
+    let scale = window.scale_factor().map_err(|_| "无法读取显示器缩放。")?;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.
+        || height <= 0.
+        || ((width * scale) - viewport.width as f64).abs() > 2.
+        || ((height * scale) - viewport.height as f64).abs() > 2.
+    {
+        return Err("显示器缩放已改变，请取消后重新截图。".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn edit_result(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    require(&window, "main")?;
+    let overlay = self::window(&app, "overlay")?;
+    let monitor = platform::cursor_monitor(&platform::monitors()?)?;
+    let state = app.state::<AppState>();
+    let info = {
+        let mut data = state.lock();
+        if data.capturing || data.modal {
+            return Err("请先完成当前操作。".into());
+        }
+        let result = data.result.as_ref().ok_or("还没有可裁剪的截图。")?;
+        let image = result.image.clone();
+        let png = result.png.clone();
+        overlay
+            .set_position(PhysicalPosition::new(monitor.x, monitor.y))
+            .map_err(|_| "无法定位裁剪窗口。")?;
+        overlay
+            .set_size(PhysicalSize::new(monitor.width, monitor.height))
+            .map_err(|_| "无法设置裁剪窗口尺寸。")?;
+        data.next_id += 1;
+        let info = SessionInfo {
+            id: data.next_id,
+            width: image.width,
+            height: image.height,
+            mode: data.settings.mode,
+            crop: true,
+        };
+        data.capture = Some(Capture {
+            info: info.clone(),
+            image,
+            png,
+            background: false,
+            monitor: None,
+        });
+        data.capturing = true;
+        info
+    };
+    if window.hide().is_err() || app.emit_to("overlay", "capture-started", info).is_err() {
+        let _ = cancel(&app, None);
+        return Err("无法打开裁剪窗口，请重试。".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_mode(app: AppHandle, mode: Mode) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -330,6 +392,9 @@ fn set_hotkey(app: AppHandle, window: WebviewWindow, hotkey: String) -> Result<S
     let candidate = parse_shortcut(&normalized)?;
     let state = app.state::<AppState>();
     let mut data = state.lock();
+    if data.capturing {
+        return Err("请结束当前截图后再修改快捷键。".into());
+    }
     if data.active_hotkey.as_ref() == Some(&normalized) {
         return Ok(normalized);
     }
@@ -452,9 +517,10 @@ fn quit_app(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "开始截图", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let finish = MenuItem::with_id(app, "finish-scroll", "结束滚动截图", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 FreeCut", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&capture, &show, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&capture, &finish, &show, &separator, &quit])?;
     let mut tray = TrayIconBuilder::with_id("freecut")
         .menu(&menu)
         .tooltip("FreeCut · 自由形状截图")
@@ -465,7 +531,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     report_error(app, error);
                 }
             }
-            "show" => show_main(app),
+            "show" => {
+                if scrolling::active(app) {
+                    scrolling::show_controls(app);
+                } else {
+                    show_main(app);
+                }
+            }
+            "finish-scroll" => {
+                if let Err(error) = scrolling::finish(app) {
+                    report_error(app, error);
+                }
+            }
             "quit" => {
                 let _ = app.global_shortcut().unregister_all();
                 app.exit(0);
@@ -484,7 +561,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     ..
                 }
             ) {
-                show_main(tray.app_handle());
+                if scrolling::active(tray.app_handle()) {
+                    scrolling::show_controls(tray.app_handle());
+                } else {
+                    show_main(tray.app_handle());
+                }
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -498,7 +579,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == "--background") {
-                show_main(app);
+                if scrolling::active(app) {
+                    scrolling::show_controls(app);
+                } else {
+                    show_main(app);
+                }
             }
         }))
         .plugin(
@@ -517,7 +602,12 @@ pub fn run() {
                     let app = app.clone();
                     let scheduled = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        if let Err(error) = begin_capture(&scheduled, None) {
+                        let result = if scrolling::active(&scheduled) {
+                            scrolling::finish(&scheduled)
+                        } else {
+                            begin_capture(&scheduled, None)
+                        };
+                        if let Err(error) = result {
                             report_error(&scheduled, error);
                         }
                     });
@@ -568,6 +658,7 @@ pub fn run() {
                 next_id: 0,
                 capture: None,
                 result: None,
+                scroll: None,
             })));
             let tray_available = build_tray(app.handle()).is_ok();
             let registered = parse_shortcut(&settings.hotkey).and_then(|shortcut| {
@@ -586,7 +677,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "overlay" {
+                if window.label() == "scroll" {
+                    api.prevent_close();
+                    let _ = scrolling::finish(window.app_handle());
+                } else if window.label() == "overlay" {
                     api.prevent_close();
                     let _ = cancel(window.app_handle(), None);
                 } else if window
@@ -611,6 +705,12 @@ pub fn run() {
             show_overlay,
             cancel_capture,
             accept_capture,
+            edit_result,
+            scrolling::start_scroll,
+            scrolling::scroll_state,
+            scrolling::pause_scroll,
+            scrolling::finish_scroll,
+            scrolling::cancel_scroll,
             set_mode,
             set_hotkey,
             copy_image,
@@ -622,6 +722,7 @@ pub fn run() {
         .expect("无法启动 FreeCut")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                scrolling::stop(app);
                 let _ = app.global_shortcut().unregister_all();
             }
         });

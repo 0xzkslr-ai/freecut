@@ -357,6 +357,36 @@ select {
   line-height: 1.8;
   user-select: text;
 }
+.scroll-window {
+  background: white;
+}
+.scroll-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.scroll-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#scroll-size {
+  font-size: 12px;
+  color: var(--muted);
+}
+#scroll-message {
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 42px;
+}
+.scroll-paused #scroll-message {
+  color: #925b13;
+}
+.scroll-panel .actions {
+  margin-top: auto;
+}
 @media (max-width: 900px) {
   .main-window {
     padding: 20px;

@@ -52,9 +52,24 @@ async function connect() {
     )
     .toBe(true);
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  await expect.poll(() => browser.contexts()[0].pages().length).toBe(2);
+  await expect.poll(() => browser.contexts()[0].pages().length).toBe(3);
+  await expect
+    .poll(
+      () =>
+        browser
+          .contexts()[0]
+          .pages()
+          .filter(
+            (page) =>
+              page.url().includes("?overlay") || page.url().includes("?scroll"),
+          ).length,
+    )
+    .toBe(2);
   const pages = browser.contexts()[0].pages();
-  const main = pages.find((page) => !page.url().includes("?overlay"));
+  const main = pages.find(
+    (page) =>
+      !page.url().includes("?overlay") && !page.url().includes("?scroll"),
+  );
   const overlay = pages.find((page) => page.url().includes("?overlay"));
   main.on("pageerror", (error) => console.error("Main error:", error));
   overlay.on("pageerror", (error) => console.error("Overlay error:", error));
@@ -134,20 +149,20 @@ try {
   await expect(main.locator("#status")).toHaveText("图片已复制。");
   probeCall("clipboard", path.join(output, "clipboard.png"));
   console.log("PASS native PNG and DIBV5 clipboard");
-  const hotkey = "Ctrl+Alt+Shift+F22";
+  const hotkey = "Ctrl+Alt+Shift+F8";
   await main.locator("#hotkey").click();
-  await main.keyboard.press("Control+Alt+Shift+F22");
+  await main.keyboard.press("Control+Alt+Shift+F8");
   await main.getByRole("button", { name: "应用", exact: true }).click();
   await expect(main.locator("#hotkey-status")).toContainText(
     "在其他应用中也能截图",
   );
-  reservation = spawn(probe, ["reserve", "Ctrl+Alt+Shift+F23"], {
+  reservation = spawn(probe, ["reserve", "Ctrl+Alt+Shift+F9"], {
     stdio: ["pipe", "pipe", "inherit"],
   });
   const [reserved] = await once(reservation.stdout, "data");
   expect(reserved.toString().trim()).toBe("true");
   await main.locator("#hotkey").click();
-  await main.keyboard.press("Control+Alt+Shift+F23");
+  await main.keyboard.press("Control+Alt+Shift+F9");
   await main.getByRole("button", { name: "应用", exact: true }).click();
   await expect(main.locator("#hotkey-status")).toContainText("仍有效");
   reservation.stdin.end("\n");

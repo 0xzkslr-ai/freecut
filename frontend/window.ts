@@ -12,7 +12,7 @@ export async function mountMain(root: HTMLElement) {
           <div class="modes" role="group" aria-label="截图工具">
             <button class="mode" data-mode="lasso" aria-pressed="true"><strong>自由套索</strong><span>按住鼠标，画出任意轮廓</span></button>
             <button class="mode" data-mode="polygon" aria-pressed="false"><strong>多边形</strong><span>逐点连线，精确勾勒边界</span></button>
-            <button class="mode" data-mode="rectangle" aria-pressed="false"><strong>矩形选取</strong><span>拖动框选，快速截取矩形</span></button>
+            <button class="mode" data-mode="rectangle" aria-pressed="false"><strong>矩形选取</strong><span>拖动框选，也可开始滚动拼接</span></button>
           </div>
           <label for="monitor">截取屏幕</label><select id="monitor" aria-label="选择要截取的显示器"></select>
           <button class="primary capture" id="capture">开始截图</button><p class="muted small">Ctrl + Shift + A · 窗口内快捷键</p>
@@ -25,7 +25,7 @@ export async function mountMain(root: HTMLElement) {
           <div class="preview-heading"><h2>截图预览</h2><span id="dimensions" class="muted">尚未截图</span></div>
           <div class="checker" id="preview"><div class="empty"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M13 14 47 19 52 40 32 53 12 38Z"/><circle cx="13" cy="14" r="4"/></svg><strong>只截取你想要的形状</strong><p>选择左侧工具，开始一次截图。<br/>选区以外的部分会变为透明。</p></div><img id="preview-image" alt="透明截图预览" hidden draggable="false" /></div>
           <p class="muted small">棋盘格表示透明区域，不会出现在导出的图片中。</p>
-          <div class="actions"><button id="copy" disabled>复制图片&nbsp; Ctrl+C</button><button id="save" class="primary" disabled>保存 PNG&nbsp; Ctrl+S</button></div>
+          <div class="actions"><button id="edit" disabled>再次裁剪</button><button id="copy" disabled>复制图片&nbsp; Ctrl+C</button><button id="save" class="primary" disabled>保存 PNG&nbsp; Ctrl+S</button></div>
         </section>
       </div>
       <p id="status" class="status" role="status">就绪 · 选择一个工具，开始截取屏幕。</p>
@@ -38,6 +38,7 @@ export async function mountMain(root: HTMLElement) {
   const capture = get<HTMLButtonElement>("capture");
   const copy = get<HTMLButtonElement>("copy");
   const save = get<HTMLButtonElement>("save");
+  const edit = get<HTMLButtonElement>("edit");
   let busy = false;
   let hasImage = false;
   let refreshId = 0;
@@ -74,8 +75,8 @@ export async function mountMain(root: HTMLElement) {
     root.querySelector<HTMLElement>(".empty")!.hidden = true;
     get("dimensions").textContent = `${preview.width} × ${preview.height} px`;
     hasImage = true;
-    copy.disabled = save.disabled = false;
-    status("截图完成 · 可以复制图片或保存透明 PNG。");
+    copy.disabled = save.disabled = edit.disabled = false;
+    status("截图完成 · 可以再次裁剪、复制图片或保存透明 PNG。");
   };
   const updateMonitors = (monitors: Monitor[]) => {
     const previous = monitor.value;
@@ -141,6 +142,7 @@ export async function mountMain(root: HTMLElement) {
     });
   copy.onclick = () => void doCopy();
   save.onclick = () => void doSave();
+  edit.onclick = () => void attempt(() => backend.edit());
   window.addEventListener("keydown", (event) => {
     if (
       event.target === hotkey ||
