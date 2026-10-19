@@ -13,6 +13,7 @@ FreeCut's own source code is MIT licensed. Dependencies retain their own license
   https://github.com/microsoft/windows-rs
 - **rfd**, contributors: MIT. https://github.com/PolyMeilex/rfd
 - **tempfile**, contributors: MIT OR Apache-2.0. https://github.com/Stebalien/tempfile
+- **RustFFT**, contributors: MIT OR Apache-2.0. https://github.com/ejmahler/RustFFT
 
 Run `node scripts/licenses.mjs` before packaging to regenerate the locked Windows
 dependency inventory and full license texts at `src-tauri/THIRD_PARTY_LICENSES.txt`.

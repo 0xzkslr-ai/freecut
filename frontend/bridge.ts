@@ -33,8 +33,22 @@ export interface ScrollInfo {
   height: number;
   frames: number;
   paused: boolean;
+  finishing: boolean;
+  recovering: boolean;
   message: string;
   hotkey: string;
+  coverage: {
+    bounds: CoverageRect;
+    viewport: CoverageRect;
+    regions: CoverageRect[];
+    unplaced: number;
+  };
+}
+export interface CoverageRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 export interface InitialState {
   settings: Settings;

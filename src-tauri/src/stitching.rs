@@ -1,8 +1,15 @@
 //! Fixed-scale, translation-only stitching. Failed matches never advance the reference frame.
 use crate::imaging::Image;
+use rustfft::{num_complex::Complex, FftPlanner};
+use std::{
+    collections::VecDeque,
+    io::Cursor,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 const MAX_PIXELS: u64 = 40_000_000;
-const MATCH_ERROR: &str = "无法可靠对齐，已暂停。请将地图移回上一次成功采集的位置附近，再继续；保持缩放不变，缓慢移动并保留重叠区域。";
+const MATCH_ERROR: &str = "正在重新定位，已有画面已保留。请放慢移动，或返回刚才经过的区域。";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Region {
@@ -91,12 +98,14 @@ struct Gray {
     width: i32,
     height: i32,
     pixels: Vec<u8>,
+    texture_floor: f64,
 }
 
 fn pyramid(image: &Image) -> Vec<Gray> {
     let mut levels = vec![Gray {
         width: image.width as i32,
         height: image.height as i32,
+        texture_floor: 12.,
         pixels: image
             .rgba
             .chunks_exact(4)
@@ -129,10 +138,12 @@ fn pyramid(image: &Image) -> Vec<Gray> {
                 );
             }
         }
+        let texture_floor = (previous.texture_floor / 4.).max(0.05);
         levels.push(Gray {
             width,
             height,
             pixels,
+            texture_floor,
         });
     }
     levels
@@ -152,36 +163,60 @@ fn score(a: &Gray, b: &Gray, dx: i32, dy: i32) -> Option<Match> {
     let top = 0.max(-dy) + 1;
     let right = b.width.min(a.width - dx) - 1;
     let bottom = b.height.min(a.height - dy) - 1;
-    if right - left < a.width * 3 / 10
-        || bottom - top < a.height * 3 / 10
-        || (right - left) * (bottom - top) < a.width * a.height / 4
+    if right - left < (a.width / 5).max(6)
+        || bottom - top < (a.height / 5).max(6)
+        || (right - left) * (bottom - top) < a.width * a.height / 6
     {
         return None;
     }
-    let step = ((right - left).max(bottom - top) / 44).max(1) as usize;
-    let (mut error, mut good, mut sum, mut squared, mut count) = (0u64, 0u64, 0u64, 0u64, 0u64);
-    for y in (top..bottom).step_by(step) {
-        for x in (left..right).step_by(step) {
-            let av = a.pixels[((y + dy) * a.width + x + dx) as usize] as i32;
-            let bv = b.pixels[(y * b.width + x) as usize] as i32;
-            let difference = (av - bv).unsigned_abs();
-            error += difference.min(48) as u64;
-            good += u64::from(difference <= 12);
-            sum += av as u64;
-            squared += (av * av) as u64;
-            count += 1;
+    let mut tiles = Vec::new();
+    let mut variance = 0.;
+    for row in 0..4 {
+        for col in 0..4 {
+            let x0 = left + (right - left) * col / 4;
+            let x1 = left + (right - left) * (col + 1) / 4;
+            let y0 = top + (bottom - top) * row / 4;
+            let y1 = top + (bottom - top) * (row + 1) / 4;
+            let step = ((x1 - x0).max(y1 - y0) / 9).max(1) as usize;
+            let (mut sa, mut sb, mut aa, mut bb, mut ab, mut n) = (0., 0., 0., 0., 0., 0.);
+            for y in (y0..y1).step_by(step) {
+                for x in (x0..x1).step_by(step) {
+                    let av = a.pixels[((y + dy) * a.width + x + dx) as usize] as f64;
+                    let bv = b.pixels[(y * b.width + x) as usize] as f64;
+                    sa += av;
+                    sb += bv;
+                    aa += av * av;
+                    bb += bv * bv;
+                    ab += av * bv;
+                    n += 1.;
+                }
+            }
+            if n < 4. {
+                continue;
+            }
+            let va = (aa - sa * sa / n).max(0.) / n;
+            let vb = (bb - sb * sb / n).max(0.) / n;
+            if va < a.texture_floor || vb < b.texture_floor {
+                continue;
+            }
+            let correlation = ((ab - sa * sb / n) / (va * vb).sqrt() / n).clamp(-1., 1.);
+            tiles.push(1. - correlation);
+            variance += va;
         }
     }
-    if count < 36 {
+    if tiles.len() < 4 {
         return None;
     }
-    let mean = sum as f64 / count as f64;
+    tiles.sort_unstable_by(f64::total_cmp);
+    let agreement = tiles.iter().filter(|&&v| v < 0.22).count() as f64 / tiles.len() as f64;
+    // A minority of animated tiles may disagree; static textured tiles must agree spatially.
+    let keep = (tiles.len() * 3 / 4).max(4);
     Some(Match {
         x: dx,
         y: dy,
-        error: error as f64 / count as f64,
-        agreement: good as f64 / count as f64,
-        variance: squared as f64 / count as f64 - mean * mean,
+        error: tiles[..keep].iter().sum::<f64>() / keep as f64 * 32.,
+        agreement,
+        variance: variance / tiles.len() as f64,
     })
 }
 
@@ -202,16 +237,99 @@ fn best_candidates(mut candidates: Vec<Match>) -> Vec<Match> {
     best
 }
 
-fn translation(a: &[Gray], b: &[Gray]) -> Result<(i32, i32), String> {
-    let level = a.len() - 1;
-    let (first, second) = (&a[level], &b[level]);
-    let mut candidates = Vec::new();
-    for y in -first.height * 7 / 10..=first.height * 7 / 10 {
-        for x in -first.width * 7 / 10..=first.width * 7 / 10 {
-            if let Some(m) = score(first, second, x, y) {
-                candidates.push(m);
+fn fft2(
+    data: &mut [Complex<f32>],
+    width: usize,
+    height: usize,
+    inverse: bool,
+    planner: &mut FftPlanner<f32>,
+) {
+    let row = if inverse {
+        planner.plan_fft_inverse(width)
+    } else {
+        planner.plan_fft_forward(width)
+    };
+    for line in data.chunks_exact_mut(width) {
+        row.process(line);
+    }
+    let column = if inverse {
+        planner.plan_fft_inverse(height)
+    } else {
+        planner.plan_fft_forward(height)
+    };
+    let mut values = vec![Complex::new(0., 0.); height];
+    for x in 0..width {
+        for y in 0..height {
+            values[y] = data[y * width + x];
+        }
+        column.process(&mut values);
+        for y in 0..height {
+            data[y * width + x] = values[y];
+        }
+    }
+}
+
+fn phase_candidates(a: &Gray, b: &Gray, planner: &mut FftPlanner<f32>) -> Vec<Match> {
+    let width = (a.width as usize * 2).next_power_of_two();
+    let height = (a.height as usize * 2).next_power_of_two();
+    let spectrum = |image: &Gray| {
+        let mut values = vec![Complex::new(0., 0.); width * height];
+        let mean = image.pixels.iter().map(|&p| p as f32).sum::<f32>() / image.pixels.len() as f32;
+        for y in 1..image.height - 1 {
+            for x in 1..image.width - 1 {
+                let i = (y * image.width + x) as usize;
+                let wx = (std::f32::consts::PI * x as f32 / (image.width - 1) as f32).sin();
+                let wy = (std::f32::consts::PI * y as f32 / (image.height - 1) as f32).sin();
+                values[y as usize * width + x as usize].re =
+                    (image.pixels[i] as f32 - mean) * wx * wy;
             }
         }
+        values
+    };
+    let mut first = spectrum(a);
+    let mut second = spectrum(b);
+    fft2(&mut first, width, height, false, planner);
+    fft2(&mut second, width, height, false, planner);
+    for (a, b) in first.iter_mut().zip(second) {
+        let cross = *a * b.conj();
+        *a = cross / cross.norm().max(1e-8);
+    }
+    fft2(&mut first, width, height, true, planner);
+    let mut peaks = Vec::new();
+    for y in -a.height * 4 / 5..=a.height * 4 / 5 {
+        for x in -a.width * 4 / 5..=a.width * 4 / 5 {
+            let index =
+                y.rem_euclid(height as i32) as usize * width + x.rem_euclid(width as i32) as usize;
+            peaks.push((first[index].re, x, y));
+        }
+    }
+    peaks.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+    let mut candidates: Vec<Match> = Vec::new();
+    for (_, x, y) in peaks {
+        if candidates
+            .iter()
+            .all(|m| (m.x - x).abs().max((m.y - y).abs()) > 2)
+        {
+            if let Some(candidate) = score(a, b, x, y) {
+                candidates.push(candidate);
+            }
+        }
+        if candidates.len() == 10 {
+            break;
+        }
+    }
+    candidates
+}
+
+fn translation(a: &[Gray], b: &[Gray], planner: &mut FftPlanner<f32>) -> Result<Match, String> {
+    let level = a
+        .iter()
+        .position(|g| g.width.max(g.height) <= 128)
+        .unwrap_or(a.len() - 1);
+    let (first, second) = (&a[level], &b[level]);
+    let mut candidates = phase_candidates(first, second, planner);
+    if let Some(stationary) = score(first, second, 0, 0) {
+        candidates.push(stationary);
     }
     candidates = best_candidates(candidates);
     for level in (0..level).rev() {
@@ -231,30 +349,142 @@ fn translation(a: &[Gray], b: &[Gray]) -> Result<(i32, i32), String> {
     // A second distant hypothesis with an equally good fit means repeated/ambiguous terrain.
     let ambiguous = candidates.iter().skip(1).any(|m| {
         (m.x - best.x).abs().max((m.y - best.y).abs()) > 4
-            && m.error <= best.error * 1.35 + 1.5
-            && m.agreement > 0.75
+            && m.error <= best.error * 1.15 + 0.1
+            && m.agreement > 0.8
     });
-    if best.error > 9. || best.agreement < 0.82 || best.variance < 25. || ambiguous {
+    if best.error > 4.5 || best.agreement < 0.65 || best.variance < 20. || ambiguous {
         return Err(MATCH_ERROR.into());
     }
-    Ok((best.x, best.y))
+    Ok(*best)
 }
 
 pub struct Stitcher {
-    canvas: Image,
-    reference: Image,
-    levels: Vec<Gray>,
-    position: (i32, i32),
-    origin: (i32, i32),
+    canvas: OnceLock<Image>,
+    reference: Located,
+    pending: Option<Located>,
+    keyframes: Vec<Keyframe>,
+    edges: Vec<Edge>,
+    cache: VecDeque<(usize, Arc<Frame>)>,
+    unplaced: VecDeque<Arc<Frame>>,
+    archive: tempfile::TempDir,
+    archived_bytes: usize,
+    planner: FftPlanner<f32>,
+    misses: u32,
+    attempts: u32,
+    search_cursor: usize,
     frames: u32,
 }
 
-fn allocation(width: u32, height: u32) -> Result<Vec<u8>, String> {
+struct Frame {
+    image: Image,
+    levels: Vec<Gray>,
+}
+#[derive(Clone)]
+struct Located {
+    frame: Arc<Frame>,
+    anchor: usize,
+    offset: (i32, i32),
+}
+struct Keyframe {
+    position: (f64, f64),
+    path: PathBuf,
+}
+struct Edge {
+    from: usize,
+    to: usize,
+    delta: (f64, f64),
+    weight: f64,
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct CoverageRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct Coverage {
+    pub bounds: CoverageRect,
+    pub viewport: CoverageRect,
+    pub regions: Vec<CoverageRect>,
+    pub unplaced: usize,
+}
+
+fn uncovered(rect: CoverageRect, covering: &[CoverageRect]) -> bool {
+    let mut remaining = vec![rect];
+    for cover in covering {
+        let mut next = Vec::new();
+        for r in remaining {
+            let left = r.x.max(cover.x);
+            let top = r.y.max(cover.y);
+            let right = (r.x + r.width as i32).min(cover.x + cover.width as i32);
+            let bottom = (r.y + r.height as i32).min(cover.y + cover.height as i32);
+            if left >= right || top >= bottom {
+                next.push(r);
+                continue;
+            }
+            for (x, y, w, h) in [
+                (r.x, r.y, r.width as i32, top - r.y),
+                (r.x, bottom, r.width as i32, r.y + r.height as i32 - bottom),
+                (r.x, top, left - r.x, bottom - top),
+                (right, top, r.x + r.width as i32 - right, bottom - top),
+            ] {
+                if w > 0 && h > 0 {
+                    next.push(CoverageRect {
+                        x,
+                        y,
+                        width: w as u32,
+                        height: h as u32,
+                    });
+                }
+            }
+        }
+        if next.is_empty() {
+            return false;
+        }
+        remaining = next;
+    }
+    !remaining.is_empty()
+}
+
+pub fn is_alignment_error(error: &str) -> bool {
+    error == MATCH_ERROR
+}
+
+fn decode_frame(path: &std::path::Path) -> Result<Arc<Frame>, String> {
+    let bytes = std::fs::read(path).map_err(|_| "无法读取采集缓存，请检查临时目录。")?;
+    let mut reader = png::Decoder::new(Cursor::new(bytes))
+        .read_info()
+        .map_err(|_| "采集缓存 PNG 无法读取。")?;
+    let size = reader.output_buffer_size().ok_or("采集缓存尺寸无效。")?;
+    let mut rgba = vec![0; size];
+    let info = reader
+        .next_frame(&mut rgba)
+        .map_err(|_| "采集缓存 PNG 无法解码。")?;
+    rgba.truncate(info.buffer_size());
+    let image = Image {
+        width: info.width,
+        height: info.height,
+        rgba,
+    };
+    image.validate()?;
+    let levels = pyramid(&image);
+    Ok(Arc::new(Frame { image, levels }))
+}
+
+fn check_dimensions(width: u32, height: u32) -> Result<(), String> {
     if width > 32768 || height > 32768 || width as u64 * height as u64 > MAX_PIXELS {
         return Err(
             "拼接图已达到尺寸上限（4000 万像素或单边 32768 像素）。请结束并保存，分段采集。".into(),
         );
     }
+    Ok(())
+}
+
+fn allocation(width: u32, height: u32) -> Result<Vec<u8>, String> {
+    check_dimensions(width, height)?;
     let length = width as usize * height as usize * 4;
     let mut pixels = Vec::new();
     pixels
@@ -278,81 +508,433 @@ impl Stitcher {
             return Err("采集区域过大，请缩小区域后重试。".into());
         }
         let levels = pyramid(&image);
+        let archive = tempfile::Builder::new()
+            .prefix("freecut-map-")
+            .tempdir()
+            .map_err(|_| "无法创建滚动采集缓存目录。")?;
+        let path = archive.path().join("0.png");
+        let png = image.png()?;
+        std::fs::write(&path, &png).map_err(|_| "无法写入滚动采集缓存。")?;
+        let frame = Arc::new(Frame { image, levels });
         Ok(Self {
-            canvas: image.clone(),
-            reference: image,
-            levels,
-            position: (0, 0),
-            origin: (0, 0),
+            canvas: OnceLock::new(),
+            reference: Located {
+                frame: frame.clone(),
+                anchor: 0,
+                offset: (0, 0),
+            },
+            pending: None,
+            keyframes: vec![Keyframe {
+                position: (0., 0.),
+                path,
+            }],
+            edges: Vec::new(),
+            cache: VecDeque::from([(0, frame)]),
+            unplaced: VecDeque::new(),
+            archive,
+            archived_bytes: png.len(),
+            planner: FftPlanner::new(),
+            misses: 0,
+            attempts: 0,
+            search_cursor: 0,
             frames: 1,
         })
     }
 
     pub fn image(&self) -> &Image {
-        &self.canvas
+        self.canvas.get_or_init(|| {
+            self.render()
+                .unwrap_or_else(|_| self.reference.frame.image.clone())
+        })
     }
     pub fn frames(&self) -> u32 {
         self.frames
     }
-    pub fn into_image(self) -> Image {
-        self.canvas
+    pub fn into_image(mut self) -> Image {
+        self.finalize()
+            .unwrap_or_else(|_| self.reference.frame.image.clone())
+    }
+
+    fn position(&self, located: &Located) -> (i32, i32) {
+        let base = self.keyframes[located.anchor].position;
+        (
+            base.0.round() as i32 + located.offset.0,
+            base.1.round() as i32 + located.offset.1,
+        )
+    }
+
+    fn rect(&self, located: &Located) -> CoverageRect {
+        let (x, y) = self.position(located);
+        CoverageRect {
+            x,
+            y,
+            width: located.frame.image.width,
+            height: located.frame.image.height,
+        }
+    }
+
+    pub fn coverage(&self) -> Coverage {
+        let (width, height) = (
+            self.reference.frame.image.width,
+            self.reference.frame.image.height,
+        );
+        let mut regions: Vec<_> = self
+            .keyframes
+            .iter()
+            .map(|k| CoverageRect {
+                x: k.position.0.round() as i32,
+                y: k.position.1.round() as i32,
+                width,
+                height,
+            })
+            .collect();
+        if let Some(pending) = &self.pending {
+            regions.push(self.rect(pending));
+        }
+        let left = regions.iter().map(|r| r.x).min().unwrap_or(0);
+        let top = regions.iter().map(|r| r.y).min().unwrap_or(0);
+        let right = regions
+            .iter()
+            .map(|r| r.x + r.width as i32)
+            .max()
+            .unwrap_or(width as i32);
+        let bottom = regions
+            .iter()
+            .map(|r| r.y + r.height as i32)
+            .max()
+            .unwrap_or(height as i32);
+        Coverage {
+            bounds: CoverageRect {
+                x: left,
+                y: top,
+                width: (right - left) as u32,
+                height: (bottom - top) as u32,
+            },
+            viewport: self.rect(&self.reference),
+            regions,
+            unplaced: self.unplaced.len(),
+        }
+    }
+
+    fn cached_frame(&mut self, index: usize) -> Result<Arc<Frame>, String> {
+        if let Some((_, frame)) = self.cache.iter().find(|(i, _)| *i == index) {
+            return Ok(frame.clone());
+        }
+        let frame = decode_frame(&self.keyframes[index].path)?;
+        self.cache.push_back((index, frame.clone()));
+        let bytes = self.reference.frame.image.rgba.len().max(1);
+        let limit = (64 * 1024 * 1024 / (bytes * 4 / 3)).clamp(1, 8);
+        while self.cache.len() > limit {
+            self.cache.pop_front();
+        }
+        Ok(frame)
+    }
+
+    fn optimize(&mut self) {
+        self.canvas.take();
+        for _ in 0..24 {
+            let mut movement: f64 = 0.;
+            for node in 1..self.keyframes.len() {
+                let (mut x, mut y, mut weight) = (0., 0., 0.);
+                for edge in &self.edges {
+                    let estimate = if edge.to == node {
+                        Some((
+                            self.keyframes[edge.from].position.0 + edge.delta.0,
+                            self.keyframes[edge.from].position.1 + edge.delta.1,
+                        ))
+                    } else if edge.from == node {
+                        Some((
+                            self.keyframes[edge.to].position.0 - edge.delta.0,
+                            self.keyframes[edge.to].position.1 - edge.delta.1,
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some(p) = estimate {
+                        x += p.0 * edge.weight;
+                        y += p.1 * edge.weight;
+                        weight += edge.weight;
+                    }
+                }
+                if weight > 0. {
+                    let next = (x / weight, y / weight);
+                    let old = self.keyframes[node].position;
+                    movement = movement.max((old.0 - next.0).abs().max((old.1 - next.1).abs()));
+                    self.keyframes[node].position = next;
+                }
+            }
+            if movement < 0.05 {
+                break;
+            }
+        }
+    }
+
+    fn archive_frame(&mut self, located: &Located) -> Result<(), String> {
+        if self.keyframes.len() >= 1024 {
+            return Err("关键画面已达上限，请结束并分段采集。".into());
+        }
+        let png = located.frame.image.png()?;
+        if self.archived_bytes + png.len() > 512 * 1024 * 1024 {
+            return Err("采集缓存已达 512 MB，请结束并保存当前图片。".into());
+        }
+        let index = self.keyframes.len();
+        let path = self.archive.path().join(format!("{index}.png"));
+        std::fs::write(&path, &png).map_err(|_| "采集缓存写入失败，请检查磁盘空间。")?;
+        let position = self.position(located);
+        self.keyframes.push(Keyframe {
+            position: (position.0 as f64, position.1 as f64),
+            path,
+        });
+        self.edges.push(Edge {
+            from: located.anchor,
+            to: index,
+            delta: (located.offset.0 as f64, located.offset.1 as f64),
+            weight: 1.,
+        });
+        self.archived_bytes += png.len();
+        self.cache.push_back((index, located.frame.clone()));
+        let limit =
+            (64 * 1024 * 1024 / (located.frame.image.rgba.len().max(1) * 4 / 3)).clamp(1, 8);
+        while self.cache.len() > limit {
+            self.cache.pop_front();
+        }
+        Ok(())
+    }
+
+    fn locate(&mut self, frame: Arc<Frame>) -> Result<Located, String> {
+        let local = translation(
+            &self.reference.frame.levels,
+            &frame.levels,
+            &mut self.planner,
+        )
+        .ok();
+        let predicted = local.map(|m| Located {
+            frame: frame.clone(),
+            anchor: self.reference.anchor,
+            offset: (self.reference.offset.0 + m.x, self.reference.offset.1 + m.y),
+        });
+        if local.is_some() && self.attempts % 6 != 0 && self.misses == 0 {
+            return Ok(predicted.unwrap());
+        }
+        let center = predicted
+            .as_ref()
+            .map(|p| self.position(p))
+            .unwrap_or_else(|| self.position(&self.reference));
+        let mut indices: Vec<_> = (0..self.keyframes.len()).collect();
+        indices.sort_unstable_by_key(|&i| {
+            let p = self.keyframes[i].position;
+            ((p.0 - center.0 as f64).abs() + (p.1 - center.1 as f64).abs()) as u64
+        });
+        let budget = if self.misses > 0 { 5 } else { 2 };
+        indices.truncate(budget);
+        if self.misses > 0 {
+            let index = self.search_cursor % self.keyframes.len();
+            if !indices.contains(&index) {
+                indices.push(index);
+            }
+            self.search_cursor += 1;
+        }
+        let mut found: Vec<(usize, Match)> = Vec::new();
+        for index in indices {
+            let anchor = self.cached_frame(index)?;
+            if let Ok(m) = translation(&anchor.levels, &frame.levels, &mut self.planner) {
+                found.push((index, m));
+            }
+        }
+        found.sort_unstable_by(|a, b| a.1.error.total_cmp(&b.1.error));
+        if let Some(&(anchor, m)) = found.first() {
+            let located = Located {
+                frame: frame.clone(),
+                anchor,
+                offset: (m.x, m.y),
+            };
+            let position = self.position(&located);
+            let ambiguous = found.iter().skip(1).any(|&(other, fit)| {
+                let p = self.keyframes[other].position;
+                (p.0 + fit.x as f64 - position.0 as f64)
+                    .abs()
+                    .max((p.1 + fit.y as f64 - position.1 as f64).abs())
+                    > 8.
+                    && fit.error <= m.error * 1.15 + 0.1
+            });
+            if !ambiguous && (local.is_none() || m.error <= local.unwrap().error + 0.5) {
+                if let Some(predicted) = &predicted {
+                    let previous = self.position(predicted);
+                    let drift = (previous.0 - position.0)
+                        .abs()
+                        .max((previous.1 - position.1).abs());
+                    if predicted.anchor != anchor
+                        && (2..=64).contains(&drift)
+                        && !self.edges.iter().any(|edge| {
+                            edge.from == predicted.anchor && edge.to == anchor && edge.weight > 1.
+                        })
+                    {
+                        self.edges.push(Edge {
+                            from: predicted.anchor,
+                            to: anchor,
+                            delta: (
+                                (predicted.offset.0 - m.x) as f64,
+                                (predicted.offset.1 - m.y) as f64,
+                            ),
+                            weight: 4.,
+                        });
+                        self.optimize();
+                    } else if drift > 64 && local.is_some() {
+                        return Ok(predicted.clone());
+                    }
+                }
+                return Ok(located);
+            }
+        }
+        predicted.ok_or_else(|| MATCH_ERROR.into())
+    }
+
+    fn retain(&mut self, located: &Located) -> Result<(), String> {
+        self.canvas.take();
+        let mut covering = self.coverage().regions;
+        // The pending frame is replaceable only when its entire footprint is covered
+        // by archived frames plus the new view. Turning back must preserve its far edge.
+        if self.pending.is_some() {
+            covering.pop();
+        }
+        if let Some(previous) = self.pending.clone() {
+            let mut with_new = covering.clone();
+            with_new.push(self.rect(located));
+            if uncovered(self.rect(&previous), &with_new) {
+                self.archive_frame(&previous)?;
+                covering.push(self.rect(&previous));
+            }
+        }
+        self.pending = if uncovered(self.rect(located), &covering) {
+            Some(located.clone())
+        } else {
+            None
+        };
+        Ok(())
+    }
+
+    pub fn render(&self) -> Result<Image, String> {
+        let coverage = self.coverage();
+        let bounds = coverage.bounds;
+        let mut image = Image {
+            width: bounds.width,
+            height: bounds.height,
+            rgba: allocation(bounds.width, bounds.height)?,
+        };
+        let mut place = |source: &Image, x: i32, y: i32| {
+            let ox = (x - bounds.x) as usize;
+            let oy = (y - bounds.y) as usize;
+            for row in 0..source.height as usize {
+                for col in 0..source.width as usize {
+                    let dst = ((oy + row) * image.width as usize + ox + col) * 4;
+                    let src = (row * source.width as usize + col) * 4;
+                    if image.rgba[dst + 3] == 0 {
+                        image.rgba[dst..dst + 4].copy_from_slice(&source.rgba[src..src + 4]);
+                    }
+                }
+            }
+        };
+        for keyframe in &self.keyframes {
+            let frame = decode_frame(&keyframe.path)?;
+            place(
+                &frame.image,
+                keyframe.position.0.round() as i32,
+                keyframe.position.1.round() as i32,
+            );
+        }
+        if let Some(pending) = &self.pending {
+            let p = self.position(pending);
+            place(&pending.frame.image, p.0, p.1);
+        }
+        Ok(image)
+    }
+
+    pub fn finalize(&mut self) -> Result<Image, String> {
+        self.optimize();
+        self.render()
+    }
+
+    fn recover_views(&mut self) -> Result<(), String> {
+        // Bound recovery work per frame so live tracking can continue between attempts.
+        let mut unresolved = VecDeque::new();
+        for _ in 0..self.unplaced.len().min(2) {
+            let frame = self.unplaced.pop_back().unwrap();
+            if let Ok(m) = translation(
+                &self.reference.frame.levels,
+                &frame.levels,
+                &mut self.planner,
+            ) {
+                let located = Located {
+                    frame,
+                    anchor: self.reference.anchor,
+                    offset: (self.reference.offset.0 + m.x, self.reference.offset.1 + m.y),
+                };
+                self.retain(&located)?;
+            } else {
+                unresolved.push_front(frame);
+            }
+        }
+        unresolved.append(&mut self.unplaced);
+        self.unplaced = unresolved;
+        Ok(())
     }
 
     pub fn push(&mut self, image: Image) -> Result<bool, String> {
         image.validate()?;
-        if image.width != self.reference.width || image.height != self.reference.height {
+        if image.width != self.reference.frame.image.width
+            || image.height != self.reference.frame.image.height
+        {
             return Err("采集区域尺寸已改变，请结束本次截图后重新开始。".into());
         }
-        if image.rgba == self.reference.rgba {
+        if image.rgba == self.reference.frame.image.rgba {
+            self.misses = 0;
+            self.recover_views()?;
             return Ok(false);
         }
-        let levels = pyramid(&image);
-        let (dx, dy) = translation(&self.levels, &levels)?;
-        if dx == 0 && dy == 0 {
-            self.reference = image;
-            self.levels = levels;
-            return Ok(false);
-        }
-        let position = (self.position.0 + dx, self.position.1 + dy);
-        let origin = (self.origin.0.min(position.0), self.origin.1.min(position.1));
-        let right = (self.origin.0 + self.canvas.width as i32).max(position.0 + image.width as i32);
-        let bottom =
-            (self.origin.1 + self.canvas.height as i32).max(position.1 + image.height as i32);
-        let (width, height) = ((right - origin.0) as u32, (bottom - origin.1) as u32);
-        if width != self.canvas.width || height != self.canvas.height {
-            let mut pixels = allocation(width, height)?;
-            let offset_x = (self.origin.0 - origin.0) as usize;
-            let offset_y = (self.origin.1 - origin.1) as usize;
-            for y in 0..self.canvas.height as usize {
-                let src = y * self.canvas.width as usize * 4;
-                let dst = ((y + offset_y) * width as usize + offset_x) * 4;
-                pixels[dst..dst + self.canvas.width as usize * 4]
-                    .copy_from_slice(&self.canvas.rgba[src..src + self.canvas.width as usize * 4]);
-            }
-            self.canvas = Image {
-                width,
-                height,
-                rgba: pixels,
-            };
-        }
-        for y in 0..image.height as usize {
-            for x in 0..image.width as usize {
-                let dst = ((y + (position.1 - origin.1) as usize) * width as usize
-                    + x
-                    + (position.0 - origin.0) as usize)
-                    * 4;
-                // Preserve previously captured content; unvisited areas stay transparent.
-                if self.canvas.rgba[dst + 3] == 0 {
-                    let src = (y * image.width as usize + x) * 4;
-                    self.canvas.rgba[dst..dst + 4].copy_from_slice(&image.rgba[src..src + 4]);
+        self.attempts += 1;
+        let frame = Arc::new(Frame {
+            levels: pyramid(&image),
+            image,
+        });
+        let located = match self.locate(frame.clone()) {
+            Ok(located) => located,
+            Err(error) if is_alignment_error(&error) => {
+                self.misses += 1;
+                if self.misses == 1 || self.misses % 8 == 0 {
+                    self.unplaced.push_back(frame);
+                    let limit = (48 * 1024 * 1024
+                        / (self.reference.frame.image.rgba.len().max(1) * 4 / 3))
+                        .clamp(1, 6);
+                    while self.unplaced.len() > limit {
+                        self.unplaced.pop_front();
+                    }
                 }
+                return Err(error);
             }
+            Err(error) => return Err(error),
+        };
+        let previous = self.position(&self.reference);
+        let position = self.position(&located);
+        if previous == position {
+            self.reference = located;
+            self.misses = 0;
+            self.recover_views()?;
+            return Ok(false);
         }
-        self.position = position;
-        self.origin = origin;
-        self.reference = image;
-        self.levels = levels;
+        let bounds = self.coverage().bounds;
+        let rect = self.rect(&located);
+        let left = bounds.x.min(rect.x);
+        let top = bounds.y.min(rect.y);
+        let right = (bounds.x + bounds.width as i32).max(rect.x + rect.width as i32);
+        let bottom = (bounds.y + bounds.height as i32).max(rect.y + rect.height as i32);
+        check_dimensions((right - left) as u32, (bottom - top) as u32)?;
+        self.retain(&located)?;
+        self.reference = located;
+        self.misses = 0;
         self.frames += 1;
+        // Revisit buffered views after recovering a known location. Unresolved views
+        // remain visible as a count; they are never pasted at a guessed position.
+        self.recover_views()?;
         Ok(true)
     }
 }
