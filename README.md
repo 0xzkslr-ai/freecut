@@ -1,146 +1,132 @@
 # FreeCut
 
 自由形状截图工具。用套索画出轮廓，或用多边形逐点勾勒，再保存为透明 PNG。
-Python + PySide6 桌面应用，所有图像处理均在本机完成。
 
-## 当前功能
-
-- **自由套索**：按住鼠标左键绘制，松开后自动闭合。
-- **多边形**：逐点添加顶点，点击起点、双击或按 Enter 闭合。
-- 确认前拖动选区移动位置，多边形可拖动顶点调整形状。
-- 多边形撤销顶点，重选和取消；隐藏操作提示后可选择提示栏下方内容。
-- 透明棋盘格预览；透明 PNG 导出；复制原生图片和 PNG 到剪贴板。
-- 按显示器选择并立即截屏；按截图实际像素导出，适配缩放。
-- **Windows 全局快捷键**：默认 `Ctrl+Alt+A`，可在主窗口修改并保存。
-- **后台托盘**：关闭主窗口或点击「后台运行」后驻留托盘；菜单可截图、显示窗口和退出。
-- 中文界面，离线使用；不会自动保存、上传截图，也不申请管理员权限。
-
-当前不包含智能选取、模型下载或 OCR。
-
-## Windows 启动
-
-安装 **Python 3.10 或更新版本**，然后双击项目根目录的 **`run.bat`**。
-首次运行会创建 `.venv` 并下载依赖，需要联网；安装完成后使用不需要联网。
-启动后不保留命令行窗口。
-
-双击 **`run_background.bat`** 可直接启动到托盘，随后按 **`Ctrl+Alt+A`** 唤起圈选。
-也可以运行 `python -m freecut --background`，或为打包后的 `FreeCut.exe` 添加
-`--background` 参数。后台启动不添加系统开机启动项。
-
-也可以在 PowerShell 中执行：
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\python.exe -m freecut
-```
-
-请使用 **Windows 原生 Python** 截取 Windows 桌面。WSL 的 Linux Python 不能代替
-Windows 原生截图后端。项目也可在有图形会话的 Linux/X11 环境运行；Wayland
-截图权限 / portal 接入和 macOS 的截图授权尚未完成适配和真机验证。
+当前版本使用 **Tauri 2 + TypeScript + Rust**，发布包无需 Python 或 Qt。
+截图后端当前支持 Windows 10 / 11 x64；Linux / macOS 的原生截图尚未迁移。
 
 ## 使用
 
-1. 选择「自由套索」或「多边形」和目标显示器。
-2. 点击「开始截图」。主窗口隐藏后立即冻结目标屏幕画面，没有定时等待。
-3. 绘制选区。套索松开即闭合；多边形可以逐点选取凹多边形。
-4. 闭合后可拖动选区内部移动，多边形顶点可以单独调整。
-5. 按 Enter 或点击「确认」，返回主窗口查看透明效果。
-6. 复制图片，或保存透明 PNG。
+双击 `dist\FreeCut-Tauri\FreeCut.exe`，或运行根目录的 `run.bat`。
+`run_background.bat` 直接启动到托盘，也可以给 exe 添加 `--background` 参数。
+需要系统安装 WebView2 Runtime；安装包会在缺失时下载运行时，不内置整套浏览器。
+便携版首次运行前需自行安装缺失的运行时。
 
-### 后台与全局快捷键
+1. 选择「自由套索」或「多边形」和目标显示器，点击「开始截图」。
+2. 主窗口隐藏后立即冻结屏幕，没有倒计时或人为等待。
+3. 套索按住左键绘制、松开闭合；多边形逐点添加，点击起点 / 双击 / Enter 闭合。
+4. 拖动闭合选区移动；多边形可以拖动顶点调整。
+5. Enter 确认，查看透明预览，然后复制图片或保存 PNG。
 
-- 默认全局截图键是 **Ctrl+Alt+A**。点击「全局截图快捷键」输入框，按下新的组合，
-  再点击「应用」；支持 Ctrl / Alt（可搭配 Shift）和字母、数字、功能键，F12 除外。
-- 设置会保存在当前用户的应用配置中，下次启动自动恢复。快捷键被其他程序占用时
-  会显示原因；更换失败时，原来的快捷键仍然有效。
-- 点击右上角「后台运行」或关闭主窗口后，FreeCut 继续在系统托盘运行。
-  单击 / 双击托盘图标可打开窗口，右键菜单可开始截图或彻底退出。
-- 全局快捷键和托盘菜单会立即截取**鼠标所在的显示器**，使用当前选定的工具。
-  点击主窗口的「开始截图」仍按界面中选定的显示器截取。
-- 从后台进入圈选后，Esc 取消会返回后台，确认截图会显示预览。重复按快捷键
-  不会叠加多个选区；保存等模态对话框打开期间暂停响应全局截图请求。
-- 右键托盘选择「退出 FreeCut」，或在主窗口按 Ctrl+Q，可彻底退出并释放快捷键。
-- 全局快捷键当前仅支持 **Windows 原生 Python**。其他平台仍可使用窗口内快捷键；
-  桌面没有系统托盘时不允许隐藏到后台，关闭窗口会直接退出。
+选区之外的像素透明，PNG 画布是选区最小外接矩形。导出使用屏幕物理像素，
+支持抗锯齿边缘、凹多边形和奇偶规则的自交轮廓；棋盘格和选区线不会导出。
+剪贴板同时提供 PNG 和 Windows DIBV5 图片，目标软件对透明度的支持可能不同。
+一次截取一个显示器，不支持跨屏绘制；HDR 画面的色调映射尚未适配。
+
+当前不包含智能选取、OCR、模型下载或开机启动。
+
+## 快捷键与后台
+
+- 默认全局截图键 **Ctrl+Alt+A**。点击输入框，按新组合，再点击「应用」。
+  支持 Ctrl / Alt（可搭配 Shift）+ 字母、数字、F1–F24，F12 除外。
+- 更换失败会保留旧快捷键。快捷键和工具设置保存到当前用户的应用配置目录。
+- 关闭主窗口或点击「后台运行」后驻留托盘，右键菜单可截图、显示窗口或退出。
+  没有可用托盘时不允许隐藏，关闭窗口会退出。
+- 全局键和托盘菜单截取鼠标所在显示器；主窗口按钮截取下拉框选定的显示器。
+- 后台截图按 Esc 返回后台；确认后打开预览。截图和保存对话框打开期间不会叠加截图。
+- 重复启动会打开已有实例。彻底退出请用托盘菜单或 Ctrl+Q。
 
 | 场景 | 快捷键 | 操作 |
 | --- | --- | --- |
-| Windows 全局 | Ctrl+Alt+A（可修改） | 直接唤起截图选区 |
-| 主窗口内 | Ctrl+Shift+A | 开始截图 |
-| 主窗口内 | Ctrl+S / Ctrl+C | 保存 / 复制已有截图 |
-| 主窗口内 | Ctrl+Q | 彻底退出 FreeCut |
-| 圈选时 | L / P | 切换套索 / 多边形，并清空当前选区 |
-| 多边形绘制中 | 右键 / Backspace / Delete / Ctrl+Z | 撤销一个顶点 |
-| 多边形闭合后 | 右键 / Backspace / Ctrl+Z | 重新打开轮廓，继续编辑 |
-| 圈选时 | Enter | 闭合未完成的多边形；已闭合时确认截图 |
-| 圈选时 | R / Esc | 重新选择 / 取消本次截图 |
-| 圈选时 | Tab | 隐藏 / 显示提示栏和确认工具条 |
+| 全局 | Ctrl+Alt+A（可修改） | 唤起截图 |
+| 主窗口 | Ctrl+Shift+A | 开始截图 |
+| 主窗口 | Ctrl+S / Ctrl+C | 保存 / 复制截图 |
+| 主窗口 | Ctrl+Q | 彻底退出 |
+| 圈选 | L / P | 切换套索 / 多边形并重选 |
+| 多边形 | 右键 / Backspace / Delete / Ctrl+Z | 撤销顶点；闭合后先重新打开轮廓 |
+| 圈选 | Enter | 闭合多边形；已闭合时确认 |
+| 圈选 | R / Esc | 重选 / 取消 |
+| 圈选 | Tab | 隐藏 / 显示操作提示和工具条 |
 
-PNG 画布仍为选区的最小外接矩形，轮廓外的像素透明；预览棋盘格不会导出。
-边缘使用抗锯齿蒙版，不额外绘制轮廓线，也不缩小原始像素。
-自交轮廓采用奇偶填充规则。复制后的透明效果取决于目标软件，PNG 文件保留 alpha。
+## 开发
 
-第一版一次选择一个显示器，不支持跨多个显示器绘制同一选区。显示器尺寸使用
-Qt 的逻辑坐标，导出使用截图的物理像素；不同 DPI 的实际多屏组合仍需要真机验证。
-
-## 开发与测试
-
-```sh
-python -m pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-python -m pytest
-python -m build
-```
-
-无显示器的测试环境设置 `QT_QPA_PLATFORM=offscreen`。测试覆盖选区状态、撤销、移动
-边界、透明与抗锯齿像素、DPI 坐标转换、PNG 读写、剪贴板数据、鼠标 / 键盘操作、
-主窗口截图流程和错误恢复。CI 配置同时运行 Windows / Linux 的离屏测试。
-全局快捷键测试模拟 Win32 注册、热键消息、冲突、替换和注销；托盘测试模拟桌面托盘，
-验证后台唤起、设置恢复、取消、窗口恢复和退出，不占用开发者的系统快捷键。
-
-Windows 原生消息回归可单独运行，不需要额外安装 pytest：
+Windows 需要 Node.js 22.12+（或更新 LTS）、Rust stable MSVC、Visual Studio C++
+生成工具及 Windows SDK、WebView2。安装 Rust 后重新打开终端。
 
 ```powershell
-.\.venv\Scripts\python.exe tests\test_windows_hotkeys.py
+npm ci
+npm run tauri -- dev
 ```
 
-该测试会临时注册 Ctrl+Alt+Shift+F22 / F23 / F24，通过 Windows 消息队列验证连续换键、
-旧消息过滤和退出后的热键释放，完成后注销全部测试热键；不会截取桌面画面。
-
-Linux 下还可以在独立的 Xvfb 桌面中检查真实屏幕像素，验证两种圈选到 PNG、复制、
-取消的完整流程（不会截取使用者桌面）：
-
-```sh
-xvfb-run -a env QT_QPA_PLATFORM=xcb FREECUT_NATIVE_TEST=1 python -m pytest -o addopts= tests/test_native_capture.py
-```
-
-X11 测试需要 `xvfb`、`xauth` 以及 Qt xcb 插件依赖；Ubuntu 可安装：
-
-```sh
-sudo apt-get install xvfb xauth libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-xkb1
-```
+前端为 TypeScript + Canvas；Rust 负责 GDI 截屏、tiny-skia 蒙版、PNG、原生剪贴板、
+保存、快捷键、窗口与托盘调度。截图数据通过进程内的自定义协议传给 WebView，
+不写入临时截图文件。
 
 ```text
-src/freecut/
-  app.py        应用入口与图标
-  hotkeys.py    Windows 原生全局热键与事件分发
-  window.py     截图调度、屏幕选择、复制与保存
-  overlay.py    屏幕选区与交互
-  selection.py  选区状态和坐标运算
-  imaging.py    透明蒙版、PNG 与剪贴板数据
-  preview.py    透明背景预览
-  theme.py      共享界面样式
+frontend/
+  window.ts      主窗口与设置
+  overlay.ts     冻结画面、选区绘制和输入
+  selection.ts   选区状态、撤销、移动和几何计算
+  bridge.ts      Rust IPC 与图像地址
+src-tauri/src/
+  desktop.rs     窗口、快捷键、托盘和截图生命周期
+  platform.rs    Windows 截屏、显示器和剪贴板
+  imaging.rs     物理像素裁剪、透明蒙版和原子保存
+  settings.rs    设置与快捷键校验
 ```
+
+## 验证
+
+```powershell
+npm run format:check
+npm run build
+npm test
+npx playwright install chromium
+npm run test:e2e
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+```
+
+前端单元测试覆盖几何、套索、多边形、移动边界和快捷键输入。Playwright 通过模拟
+Tauri IPC 验证界面流程；不代表原生截屏测试。Rust 测试验证透明像素、抗锯齿、DPI
+映射、PNG 往返、保存失败保护、设置恢复，Windows 额外验证 DIBV5。
+Linux 可运行前端测试和 `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features`。
+不同 DPI 的多屏、HDR 和复杂驱动组合仍需要更多真机验证。
+
+Windows 真机回归（先退出正在运行的 FreeCut）：
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --example native_probe --locked
+node scripts/native-smoke.mjs
+```
+
+该测试需要先构建发布版；使用隔离的设置、固定颜色的全屏测试窗口和临时 WebView2
+调试端口，验证真实截图、透明像素、快捷键消息、后台、剪贴板、原生保存和重启。
+会暂时覆盖剪贴板图片，结束后关闭测试进程。该探针和调试设置不随产品发布。
 
 ## Windows 打包
 
-先运行 `run.bat` 安装环境，再双击 `build_windows.bat`。
-输出目录为 `dist\FreeCut\`，入口是 `FreeCut.exe`；分发时保留整个目录。
-Windows 程序需要在 Windows 上构建；Linux 构建不能生成 Windows 可执行文件。
+双击 `build_windows.bat`，或运行：
 
-## 开源许可
+```powershell
+npm ci
+node scripts/licenses.mjs
+npm run tauri -- build
+```
 
-FreeCut 源码采用 [MIT](LICENSE) 许可，依赖保留各自许可。
-Qt / PySide6 的许可、源码获取与二进制分发说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+`src-tauri\target\release\FreeCut.exe` 为便携程序；
+`src-tauri\target\release\bundle\nsis\` 为安装包。
+脚本会将程序和许可整理到 `dist\FreeCut-Tauri\`，不包含 Python / Qt 或 AI 模型。
+WebView2 使用系统运行时，其安装体积另计。构建与验证记录见 [MIGRATION.md](MIGRATION.md)。
+
+## Python 旧版
+
+`src/freecut/`、`tests/` 和 `pyproject.toml` 保留为迁移对照，旧版本位于 Git
+提交 `76cf8b0`。手动运行旧版：`.venv\Scripts\python.exe -m freecut`。
+旧包 `dist\FreeCut\` 与新的 `dist\FreeCut-Tauri\` 分开保留。
+
+## 许可
+
+FreeCut 源码采用 [MIT](LICENSE)。依赖信息见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，发布时附带生成的依赖许可清单。

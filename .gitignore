@@ -10,3 +10,11 @@ htmlcov/
 build/
 dist/
 *.spec
+node_modules/
+web-dist/
+src-tauri/target/
+src-tauri/gen/
+.tools/
+coverage/
+playwright-report/
+test-results/

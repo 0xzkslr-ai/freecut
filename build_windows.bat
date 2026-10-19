@@ -1,21 +1,29 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-    echo Run run.bat first to create the Python environment.
-    pause
-    exit /b 1
-)
-".venv\Scripts\python.exe" -m pip install -e ".[bundle]"
+set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+where node >nul 2>nul
+if errorlevel 1 goto prerequisites
+where cargo >nul 2>nul
+if errorlevel 1 goto prerequisites
+call npm ci
 if errorlevel 1 goto fail
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --onedir --name FreeCut --paths src src/freecut/__main__.py
+node scripts\licenses.mjs
 if errorlevel 1 goto fail
-copy /Y LICENSE dist\FreeCut\LICENSE.txt >nul
-copy /Y THIRD_PARTY_NOTICES.md dist\FreeCut\THIRD_PARTY_NOTICES.md >nul
-echo Built: dist\FreeCut\FreeCut.exe
-echo Distribute the entire dist\FreeCut directory, including Qt libraries and licenses.
+call npm run tauri -- build
+if errorlevel 1 goto fail
+node scripts\package-portable.mjs
+if errorlevel 1 goto fail
+echo Portable: dist\FreeCut-Tauri\FreeCut.exe
+echo Installer: src-tauri\target\release\bundle\nsis\
+echo The portable executable requires the system WebView2 Runtime.
 pause
 exit /b 0
+:prerequisites
+echo Install Node.js, Rust MSVC, Visual Studio C++ build tools and WebView2.
+echo See README.md, then reopen the terminal and retry.
+pause
+exit /b 1
 :fail
 echo Build failed. Check the error above.
 pause

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FreeCut",
+  "version": "0.2.0",
+  "identifier": "app.freecut.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../web-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FreeCut · 自由形状截图",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 600,
+        "visible": false,
+        "center": true,
+        "backgroundColor": "#f4f7f8"
+      },
+      {
+        "label": "overlay",
+        "url": "index.html?overlay",
+        "title": "FreeCut · 选择截图区域",
+        "visible": false,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#172b35"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' freecut: http://freecut.localhost; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/32x32.png", "icons/128x128.png"],
+    "shortDescription": "自由形状截图工具",
+    "category": "Utility",
+    "resources": {
+      "../LICENSE": "LICENSE.txt",
+      "THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}

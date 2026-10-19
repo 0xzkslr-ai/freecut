@@ -1,0 +1,27 @@
+{
+  "name": "freecut",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "format": "prettier --write frontend tests-web scripts *.json *.ts src-tauri/tauri.conf.json src-tauri/capabilities/*.json",
+    "format:check": "prettier --check frontend tests-web scripts *.json *.ts src-tauri/tauri.conf.json src-tauri/capabilities/*.json",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@tauri-apps/cli": "^2.12.3",
+    "@vitest/coverage-v8": "^4.0.0",
+    "prettier": "^3.8.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.4",
+    "vitest": "^4.0.0"
+  }
+}
