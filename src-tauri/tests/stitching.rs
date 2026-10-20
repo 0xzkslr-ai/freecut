@@ -72,6 +72,12 @@ fn revisiting_and_changing_direction_does_not_duplicate_content() {
     let mut stitcher = Stitcher::new(frame(100, 100, 180, 160)).unwrap();
     for (x, y) in [(145, 100), (145, 145), (100, 145), (100, 100), (65, 100)] {
         stitcher.push(frame(x, y, 180, 160)).unwrap();
+        let view = stitcher.coverage().viewport;
+        assert_eq!(
+            (view.x, view.y),
+            (x - 100, y - 100),
+            "viewport drift after moving to ({x}, {y})"
+        );
     }
     let image = stitcher.into_image();
     assert_eq!((image.width, image.height), (260, 205));
@@ -80,6 +86,17 @@ fn revisiting_and_changing_direction_does_not_duplicate_content() {
         &image.rgba[((204 * 260) * 4)..((204 * 260) * 4 + 4)],
         &[0, 0, 0, 0]
     );
+    let expected = frame(65, 100, 260, 205);
+    for (index, (actual, expected)) in image
+        .rgba
+        .chunks_exact(4)
+        .zip(expected.rgba.chunks_exact(4))
+        .enumerate()
+    {
+        if actual[3] != 0 {
+            assert_eq!(actual, expected, "misaligned output pixel at index {index}");
+        }
+    }
 }
 
 #[test]

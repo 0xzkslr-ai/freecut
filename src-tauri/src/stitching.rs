@@ -154,6 +154,7 @@ struct Match {
     x: i32,
     y: i32,
     error: f64,
+    pixel_error: f64,
     agreement: f64,
     variance: f64,
 }
@@ -171,6 +172,7 @@ fn score(a: &Gray, b: &Gray, dx: i32, dy: i32) -> Option<Match> {
     }
     let mut tiles = Vec::new();
     let mut variance = 0.;
+    let (mut pixel_error, mut samples) = (0., 0.);
     for row in 0..4 {
         for col in 0..4 {
             let x0 = left + (right - left) * col / 4;
@@ -188,6 +190,8 @@ fn score(a: &Gray, b: &Gray, dx: i32, dy: i32) -> Option<Match> {
                     aa += av * av;
                     bb += bv * bv;
                     ab += av * bv;
+                    pixel_error += (av - bv).abs();
+                    samples += 1.;
                     n += 1.;
                 }
             }
@@ -215,13 +219,76 @@ fn score(a: &Gray, b: &Gray, dx: i32, dy: i32) -> Option<Match> {
         x: dx,
         y: dy,
         error: tiles[..keep].iter().sum::<f64>() / keep as f64 * 32.,
+        pixel_error: pixel_error / samples,
         agreement,
         variance: variance / tiles.len() as f64,
     })
 }
 
+fn compare_matches(a: &Match, b: &Match) -> std::cmp::Ordering {
+    // Exact correlation can differ by floating-point noise. When the robust
+    // scores tie, include samples from every tile so a one-pixel mismatch in
+    // discarded tiles cannot beat the exact translation. Clamping only the
+    // numerical zero region keeps this comparator transitive.
+    a.error
+        .max(1e-9)
+        .total_cmp(&b.error.max(1e-9))
+        .then_with(|| a.pixel_error.total_cmp(&b.pixel_error))
+        .then_with(|| a.y.cmp(&b.y))
+        .then_with(|| a.x.cmp(&b.x))
+}
+
+fn pixel_error(a: &Gray, b: &Gray, dx: i32, dy: i32) -> f64 {
+    let left = 0.max(-dx) + 1;
+    let top = 0.max(-dy) + 1;
+    let right = b.width.min(a.width - dx) - 1;
+    let bottom = b.height.min(a.height - dy) - 1;
+    let difference = |x: i32, y: i32| {
+        let first = a.pixels[((y + dy) * a.width + x + dx) as usize];
+        let second = b.pixels[(y * b.width + x) as usize];
+        first.abs_diff(second) as u64
+    };
+    let mut sum = 0;
+    // Full rows and columns cover every pixel phase along each axis. A second
+    // sparse grid can miss exactly the same edges as the correlation samples.
+    for stripe in 0..8 {
+        let x = left + (right - left - 1) * stripe / 7;
+        let y = top + (bottom - top - 1) * stripe / 7;
+        for row in top..bottom {
+            sum += difference(x, row);
+        }
+        for col in left..right {
+            sum += difference(col, y);
+        }
+    }
+    sum as f64 / (8 * (right - left + bottom - top)) as f64
+}
+
+fn refine_pixel_alignment(a: &Gray, b: &Gray, best: Match) -> Match {
+    let rank = best.error.max(1e-9);
+    let mut tied = Vec::new();
+    // Candidate suppression merges peaks within two pixels. Recover those
+    // neighbours before resolving sparse-score ties against independent pixels.
+    for y in best.y - 2..=best.y + 2 {
+        for x in best.x - 2..=best.x + 2 {
+            if let Some(candidate) = score(a, b, x, y) {
+                if candidate.error.max(1e-9) == rank {
+                    tied.push(candidate);
+                }
+            }
+        }
+    }
+    if tied.len() <= 1 {
+        return best;
+    }
+    for candidate in &mut tied {
+        candidate.pixel_error = pixel_error(a, b, candidate.x, candidate.y);
+    }
+    tied.into_iter().min_by(compare_matches).unwrap_or(best)
+}
+
 fn best_candidates(mut candidates: Vec<Match>) -> Vec<Match> {
-    candidates.sort_unstable_by(|a, b| a.error.total_cmp(&b.error));
+    candidates.sort_unstable_by(compare_matches);
     let mut best: Vec<Match> = Vec::new();
     for candidate in candidates {
         if best
@@ -345,7 +412,8 @@ fn translation(a: &[Gray], b: &[Gray], planner: &mut FftPlanner<f32>) -> Result<
         }
         candidates = best_candidates(refined);
     }
-    let best = candidates.first().ok_or(MATCH_ERROR)?;
+    let best = candidates.first().copied().ok_or(MATCH_ERROR)?;
+    let best = refine_pixel_alignment(&a[0], &b[0], best);
     // A second distant hypothesis with an equally good fit means repeated/ambiguous terrain.
     let ambiguous = candidates.iter().skip(1).any(|m| {
         (m.x - best.x).abs().max((m.y - best.y).abs()) > 4
@@ -355,7 +423,7 @@ fn translation(a: &[Gray], b: &[Gray], planner: &mut FftPlanner<f32>) -> Result<
     if best.error > 4.5 || best.agreement < 0.65 || best.variance < 20. || ambiguous {
         return Err(MATCH_ERROR.into());
     }
-    Ok(*best)
+    Ok(best)
 }
 
 pub struct Stitcher {
@@ -741,7 +809,7 @@ impl Stitcher {
                 found.push((index, m));
             }
         }
-        found.sort_unstable_by(|a, b| a.1.error.total_cmp(&b.1.error));
+        found.sort_unstable_by(|a, b| compare_matches(&a.1, &b.1));
         if let Some(&(anchor, m)) = found.first() {
             let located = Located {
                 frame: frame.clone(),
