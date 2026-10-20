@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+type CapturedFrame = (u64, Result<Image, String>);
+type CaptureStream = mpsc::Receiver<CapturedFrame>;
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ScrollInfo {
@@ -307,7 +310,7 @@ fn complete(app: &AppHandle, job: &Arc<Job>, image: Image, png: Arc<Vec<u8>>) {
     });
 }
 
-fn capture_stream(job: Arc<Job>) -> Result<mpsc::Receiver<(u64, Result<Image, String>)>, String> {
+fn capture_stream(job: Arc<Job>) -> Result<CaptureStream, String> {
     let bytes = job.region.width as usize * job.region.height as usize * 4;
     let capacity = (48 * 1024 * 1024 / bytes.max(1)).clamp(1, 3);
     let (sender, receiver) = mpsc::sync_channel(capacity);
