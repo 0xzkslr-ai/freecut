@@ -17,6 +17,7 @@ export interface Session {
   height: number;
   mode: Mode;
   crop?: boolean;
+  recording?: boolean;
 }
 export interface Preview {
   id: number;
@@ -56,6 +57,31 @@ export interface InitialState {
   preview: Preview | null;
   hotkeyError: string | null;
   trayAvailable: boolean;
+  recordedVideo?: RecordingResult | null;
+}
+
+export interface RecordingInfo {
+  id: number;
+  width: number;
+  height: number;
+  elapsedMs: number;
+  frames: number;
+  paused: boolean;
+  starting: boolean;
+  finishing: boolean;
+  message: string;
+  hotkey: string;
+  region?: CoverageRect;
+  monitorName?: string;
+}
+export interface RecordingResult {
+  id: number;
+  width: number;
+  height: number;
+  elapsedMs: number;
+  bytes: number;
+  path: string;
+  warning: string | null;
 }
 
 export const imageUrl = (id: number, kind: "source" | "preview") =>
@@ -68,6 +94,8 @@ export const backend = {
   monitors: () => invoke<Monitor[]>("list_monitors"),
   capture: (monitorId: string | null) =>
     invoke<void>("start_capture", { monitorId }),
+  recordSelection: (monitorId: string | null) =>
+    invoke<void>("start_capture", { monitorId, recording: true }),
   session: () => invoke<Session | null>("current_session"),
   showOverlay: (id: number) => invoke<void>("show_overlay", { id }),
   cancel: (id: number) => invoke<void>("cancel_capture", { id }),
@@ -80,6 +108,20 @@ export const backend = {
     invoke<void>("pause_scroll", { id, paused }),
   finishScroll: (id: number) => invoke<void>("finish_scroll", { id }),
   cancelScroll: (id: number) => invoke<void>("cancel_scroll", { id }),
+  record: (id: number, points: Point[], width: number, height: number) =>
+    invoke<boolean>("start_recording", { id, points, width, height }),
+  recordingState: () => invoke<RecordingInfo | null>("recording_state"),
+  recordingRegionReady: () => invoke<void>("recording_region_ready"),
+  recordingRegionShown: (id: number) =>
+    invoke<void>("recording_region_shown", { id }),
+  highlightRecordingRegion: (id: number) =>
+    invoke<void>("highlight_recording_region", { id }),
+  pauseRecording: (id: number, paused: boolean) =>
+    invoke<void>("pause_recording", { id, paused }),
+  finishRecording: (id: number) => invoke<void>("finish_recording", { id }),
+  cancelRecording: (id: number) => invoke<void>("cancel_recording", { id }),
+  openRecording: (id: number, folder: boolean) =>
+    invoke<void>("open_recording", { id, folder }),
   edit: () => invoke<void>("edit_result"),
   mode: (mode: Mode) => invoke<void>("set_mode", { mode }),
   hotkey: (hotkey: string) => invoke<string>("set_hotkey", { hotkey }),

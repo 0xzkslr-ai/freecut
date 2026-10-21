@@ -15,6 +15,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[path = "diagnostics.rs"]
 mod diagnostics;
+#[path = "recording.rs"]
+mod recording;
 #[path = "scrolling.rs"]
 mod scrolling;
 
@@ -25,6 +27,7 @@ struct SessionInfo {
     height: u32,
     mode: Mode,
     crop: bool,
+    recording: bool,
 }
 struct Capture {
     info: SessionInfo,
@@ -50,6 +53,9 @@ struct Data {
     capture: Option<Capture>,
     result: Option<ResultImage>,
     scroll: Option<Arc<scrolling::Job>>,
+    recording: Option<Arc<recording::Job>>,
+    recorded_video: Option<recording::RecordingResult>,
+    recording_frame_ready: bool,
 }
 struct AppState(Mutex<Data>);
 impl AppState {
@@ -66,6 +72,7 @@ struct InitialState {
     preview: Option<Preview>,
     hotkey_error: Option<String>,
     tray_available: bool,
+    recorded_video: Option<recording::RecordingResult>,
 }
 
 fn window(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
@@ -110,6 +117,7 @@ fn initial_state(app: AppHandle, window: WebviewWindow) -> Result<InitialState, 
         preview: data.result.as_ref().map(|r| r.info.clone()),
         hotkey_error: data.hotkey_error.clone(),
         tray_available: data.tray_available,
+        recorded_video: data.recorded_video.clone(),
     })
 }
 
@@ -142,7 +150,10 @@ fn frontend_ready(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 async fn frontend_failed(window: WebviewWindow, message: String) -> Result<(), String> {
     let label = window.label().to_owned();
-    if !matches!(label.as_str(), "main" | "overlay" | "scroll") {
+    if !matches!(
+        label.as_str(),
+        "main" | "overlay" | "scroll" | "record" | "record-region"
+    ) {
         return Err("当前窗口无法报告界面错误。".into());
     }
     // Preserve the error even if showing the failed window stalls on the UI thread.
@@ -198,7 +209,11 @@ fn prepare_capture_windows(app: &AppHandle, monitor: &Monitor) -> Result<(), Str
         .map_err(|_| "截图窗口切换已中断，请重试。".to_string())?
 }
 
-fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), String> {
+fn begin_capture(
+    app: &AppHandle,
+    monitor_id: Option<String>,
+    recording: bool,
+) -> Result<(), String> {
     let main = window(app, "main")?;
     let overlay = window(app, "overlay")?;
     // Native window queries can dispatch to the event loop. Do not hold app
@@ -213,7 +228,14 @@ fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), Stri
         }
         let background = data.tray_available && main_in_background;
         data.capturing = true;
-        (data.settings.mode, background)
+        (
+            if recording {
+                Mode::Rectangle
+            } else {
+                data.settings.mode
+            },
+            background,
+        )
     };
     let result = (|| {
         let monitors = platform::monitors()?;
@@ -242,6 +264,7 @@ fn begin_capture(app: &AppHandle, monitor_id: Option<String>) -> Result<(), Stri
                 height: image.height,
                 mode,
                 crop: false,
+                recording,
             };
             data.capture = Some(Capture {
                 info: info.clone(),
@@ -272,15 +295,20 @@ async fn start_capture(
     app: AppHandle,
     window: WebviewWindow,
     monitor_id: Option<String>,
+    recording: Option<bool>,
 ) -> Result<(), String> {
     require(&window, "main")?;
-    capture_in_background(app, monitor_id).await
+    capture_in_background(app, monitor_id, recording.unwrap_or(false)).await
 }
 
-async fn capture_in_background(app: AppHandle, monitor_id: Option<String>) -> Result<(), String> {
+async fn capture_in_background(
+    app: AppHandle,
+    monitor_id: Option<String>,
+    recording: bool,
+) -> Result<(), String> {
     // Keep the event loop free to apply window visibility changes before the
     // desktop is read, and keep PNG encoding off the UI thread as well.
-    tauri::async_runtime::spawn_blocking(move || begin_capture(&app, monitor_id))
+    tauri::async_runtime::spawn_blocking(move || begin_capture(&app, monitor_id, recording))
         .await
         .map_err(|_| "截图任务意外停止，请重试。".to_string())?
 }
@@ -288,7 +316,7 @@ async fn capture_in_background(app: AppHandle, monitor_id: Option<String>) -> Re
 fn request_capture(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = capture_in_background(app.clone(), None).await {
+        if let Err(error) = capture_in_background(app.clone(), None, false).await {
             let scheduled = app.clone();
             let _ = app.run_on_main_thread(move || report_error(&scheduled, error));
         }
@@ -372,7 +400,7 @@ fn accept_capture(
         let capture = data
             .capture
             .as_ref()
-            .filter(|c| c.info.id == id)
+            .filter(|c| c.info.id == id && !c.info.recording)
             .ok_or("本次截图已结束。")?;
         let image = imaging::crop(&capture.image, &points, width, height)?;
         let png = Arc::new(image.png()?);
@@ -439,6 +467,7 @@ fn edit_result(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
             height: image.height,
             mode: data.settings.mode,
             crop: true,
+            recording: false,
         };
         data.capture = Some(Capture {
             info: info.clone(),
@@ -598,6 +627,14 @@ fn hide_to_tray(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn quit_app(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
     require(&window, "main")?;
+    request_quit(&app)
+}
+
+fn request_quit(app: &AppHandle) -> Result<(), String> {
+    // The recording worker finalizes the container before honoring an exit request.
+    if recording::request_exit(app)? {
+        return Ok(());
+    }
     let _ = app.global_shortcut().unregister_all();
     app.exit(0);
     Ok(())
@@ -607,19 +644,30 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "开始截图", true, None::<&str>)?;
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let finish = MenuItem::with_id(app, "finish-scroll", "结束滚动截图", true, None::<&str>)?;
+    let finish_record =
+        MenuItem::with_id(app, "finish-record", "结束录屏并保存", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 FreeCut", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&capture, &finish, &show, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&capture, &finish, &finish_record, &show, &separator, &quit],
+    )?;
     let mut tray = TrayIconBuilder::with_id("freecut")
         .menu(&menu)
         .tooltip("FreeCut · 自由形状截图")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "capture" => {
-                request_capture(app);
+                if recording::active(app) {
+                    let _ = recording::finish(app);
+                } else {
+                    request_capture(app);
+                }
             }
             "show" => {
-                if scrolling::active(app) {
+                if recording::active(app) {
+                    recording::show_controls(app);
+                } else if scrolling::active(app) {
                     scrolling::show_controls(app);
                 } else {
                     show_main(app);
@@ -631,8 +679,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "quit" => {
-                let _ = app.global_shortcut().unregister_all();
-                app.exit(0);
+                let _ = request_quit(app);
+            }
+            "finish-record" => {
+                if let Err(error) = recording::finish(app) {
+                    report_error(app, error);
+                }
             }
             _ => {}
         })
@@ -648,7 +700,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     ..
                 }
             ) {
-                if scrolling::active(tray.app_handle()) {
+                if recording::active(tray.app_handle()) {
+                    recording::show_controls(tray.app_handle());
+                } else if scrolling::active(tray.app_handle()) {
                     scrolling::show_controls(tray.app_handle());
                 } else {
                     show_main(tray.app_handle());
@@ -695,7 +749,9 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             diagnostics::write("INFO", "Second instance requested activation");
             if !args.iter().any(|arg| arg == "--background") {
-                if scrolling::active(app) {
+                if recording::active(app) {
+                    recording::show_controls(app);
+                } else if scrolling::active(app) {
                     scrolling::show_controls(app);
                 } else {
                     show_main(app);
@@ -718,7 +774,11 @@ pub fn run() {
                     let app = app.clone();
                     let scheduled = app.clone();
                     let _ = app.run_on_main_thread(move || {
-                        if scrolling::active(&scheduled) {
+                        if recording::active(&scheduled) {
+                            if let Err(error) = recording::finish(&scheduled) {
+                                report_error(&scheduled, error);
+                            }
+                        } else if scrolling::active(&scheduled) {
                             if let Err(error) = scrolling::finish(&scheduled) {
                                 report_error(&scheduled, error);
                             }
@@ -776,6 +836,9 @@ pub fn run() {
                 capture: None,
                 result: None,
                 scroll: None,
+                recording: None,
+                recorded_video: None,
+                recording_frame_ready: false,
             })));
             let tray_available = match build_tray(app.handle()) {
                 Ok(()) => {
@@ -810,12 +873,29 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "scroll" {
+                if window.label() == "record-region" {
+                    api.prevent_close();
+                    if !recording::active(window.app_handle()) {
+                        let _ = window.hide();
+                    }
+                } else if window.label() == "record" {
+                    api.prevent_close();
+                    let _ = recording::finish(window.app_handle());
+                } else if window.label() == "scroll" {
                     api.prevent_close();
                     let _ = scrolling::finish(window.app_handle());
                 } else if window.label() == "overlay" {
                     api.prevent_close();
                     let _ = cancel(window.app_handle(), None);
+                } else if recording::active(window.app_handle())
+                    && !window
+                        .app_handle()
+                        .state::<AppState>()
+                        .lock()
+                        .tray_available
+                {
+                    api.prevent_close();
+                    let _ = request_quit(window.app_handle());
                 } else if window
                     .app_handle()
                     .state::<AppState>()
@@ -833,6 +913,15 @@ pub fn run() {
             initial_state,
             frontend_ready,
             frontend_failed,
+            recording::start_recording,
+            recording::recording_state,
+            recording::recording_region_ready,
+            recording::recording_region_shown,
+            recording::highlight_recording_region,
+            recording::pause_recording,
+            recording::finish_recording,
+            recording::cancel_recording,
+            recording::open_recording,
             list_monitors,
             start_capture,
             current_session,

@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
   "description": "Local FreeCut windows can listen for capture lifecycle events.",
-  "windows": ["main", "overlay", "scroll"],
+  "windows": ["main", "overlay", "scroll", "record", "record-region"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

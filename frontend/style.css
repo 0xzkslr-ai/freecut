@@ -403,6 +403,358 @@ select {
 .scroll-panel .actions {
   margin-top: auto;
 }
+.record-window {
+  background: #17232f;
+  color: #f5f8fc;
+}
+.record-panel {
+  --record-accent: #ff6573;
+  --record-muted: #adbdcd;
+  height: 100vh;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.record-heading {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+  cursor: move;
+  user-select: none;
+}
+.record-brand,
+.record-status,
+.record-actions,
+.record-timing {
+  display: flex;
+  align-items: center;
+}
+.record-brand {
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.record-brand svg {
+  width: 20px;
+  height: 20px;
+  color: var(--record-accent);
+}
+.record-panel svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+.record-title {
+  margin-left: 6px;
+  color: var(--record-muted);
+  font-weight: 400;
+}
+.record-status {
+  gap: 6px;
+  border: 1px solid #ffffff1c;
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--record-accent);
+}
+.record-timing {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+.record-time {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 34px;
+  line-height: 44px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.record-format {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--record-muted);
+}
+.record-format strong {
+  color: #e8eef5;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.record-panel button {
+  min-height: 44px;
+  background: #243444;
+  border-color: #3b4f62;
+  color: #edf4fa;
+  padding: 8px 12px;
+  transition:
+    background-color 150ms,
+    border-color 150ms;
+}
+.record-panel button:hover {
+  background: #30475c;
+  border-color: #6b8299;
+}
+.record-panel button:active {
+  background: #1b2d3e;
+}
+.record-panel button:focus-visible {
+  outline: 2px solid #91c6ff;
+  outline-offset: 2px;
+}
+.record-panel button:disabled {
+  background: #202f3e;
+  border-color: #324355;
+  color: #8295a7;
+  cursor: default;
+}
+.record-panel .record-region-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  text-align: left;
+  padding: 8px 10px;
+}
+.record-region-button > svg {
+  width: 22px;
+  height: 22px;
+  color: var(--record-accent);
+}
+.record-region-description {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+#record-size {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+}
+#record-position {
+  color: var(--record-muted);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.record-locate-label {
+  color: #b9d7f0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+#record-message {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--record-muted);
+}
+.record-actions {
+  gap: 8px;
+}
+.record-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  flex: 1;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.record-actions svg {
+  width: 18px;
+  height: 18px;
+}
+.record-actions .record-discard {
+  flex: none;
+  width: 44px;
+  padding: 10px;
+}
+.record-actions .record-discard:hover {
+  color: #ffafb6;
+  border-color: #b25b67;
+  background: #462d39;
+}
+.record-actions .record-stop {
+  flex: 1.4;
+  background: #c73242;
+  border-color: #de4a59;
+  color: white;
+}
+.record-actions .record-stop:hover {
+  background: #ac2535;
+  border-color: #f07e88;
+}
+.record-actions .record-stop:disabled {
+  background: #59363f;
+  border-color: #77505c;
+  color: #c5a6af;
+}
+.record-stop rect {
+  fill: currentColor;
+  stroke: none;
+}
+.record-panel .record-resume-glyph {
+  display: none;
+}
+[data-phase="paused"] .record-pause-glyph {
+  display: none;
+}
+[data-phase="paused"] .record-resume-glyph {
+  display: inline;
+}
+#record-hotkey {
+  color: var(--record-muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+.record-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.record-window [data-phase="paused"] .record-panel {
+  --record-accent: #ffd083;
+}
+.record-window [data-phase="starting"] .record-panel,
+.record-window [data-phase="finishing"] .record-panel {
+  --record-accent: #b5c7d9;
+}
+.record-region-root,
+.record-region-root body,
+.record-region-root #app {
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.recording-region {
+  --region-accent: #ff5367;
+  position: fixed;
+  inset: 0;
+  border: 2px solid var(--region-accent);
+  box-shadow: inset 0 0 0 1px #0009;
+  color: white;
+}
+[data-phase="paused"] .recording-region {
+  --region-accent: #ffc15e;
+  border-style: dashed;
+}
+[data-phase="starting"] .recording-region,
+[data-phase="finishing"] .recording-region {
+  --region-accent: #bed0df;
+}
+.region-corner {
+  position: absolute;
+  width: min(18px, 25%);
+  height: min(18px, 25%);
+  border: 0 solid var(--region-accent);
+}
+.region-corner-tl {
+  top: -2px;
+  left: -2px;
+  border-top-width: 4px;
+  border-left-width: 4px;
+}
+.region-corner-tr {
+  top: -2px;
+  right: -2px;
+  border-top-width: 4px;
+  border-right-width: 4px;
+}
+.region-corner-bl {
+  bottom: -2px;
+  left: -2px;
+  border-bottom-width: 4px;
+  border-left-width: 4px;
+}
+.region-corner-br {
+  bottom: -2px;
+  right: -2px;
+  border-bottom-width: 4px;
+  border-right-width: 4px;
+}
+.region-label {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid #ffffff40;
+  border-radius: 5px;
+  background: #17232ff5;
+  color: #f7fafc;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.region-label i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--region-accent);
+}
+.region-label strong {
+  font-weight: 500;
+}
+#region-size {
+  color: #bccbd8;
+}
+.region-small .region-label {
+  display: none;
+}
+.region-highlight .recording-region {
+  box-shadow:
+    inset 0 0 0 5px var(--region-accent),
+    inset 0 0 0 6px #fff8;
+}
+@media (prefers-reduced-motion: reduce) {
+  .record-panel button {
+    transition: none;
+  }
+}
+.video-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 28px;
+  background: #fffffff2;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-align: center;
+  max-width: 100%;
+}
+.video-symbol {
+  font-size: 36px;
+  color: var(--primary);
+}
+#video-path {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: text;
+}
 @media (max-width: 900px) {
   .main-window {
     padding: 20px;

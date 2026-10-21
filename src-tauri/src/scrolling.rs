@@ -90,14 +90,14 @@ fn publish(app: &AppHandle, job: &Arc<Job>) {
     });
 }
 
-fn restore_tooltip(app: &AppHandle) {
+pub(super) fn restore_tooltip(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id("freecut") {
         let key = app.state::<AppState>().lock().settings.hotkey.clone();
         let _ = tray.set_tooltip(Some(format!("FreeCut · {key} 截图")));
     }
 }
 
-fn controls_position(
+pub(super) fn controls_position(
     monitor: &Monitor,
     region: &Monitor,
     size: PhysicalSize<u32>,
@@ -165,7 +165,7 @@ pub(super) fn start_scroll(
         let capture = data
             .capture
             .as_ref()
-            .filter(|c| c.info.id == id && !c.info.crop)
+            .filter(|c| c.info.id == id && !c.info.crop && !c.info.recording)
             .ok_or("本次截图已结束，或当前正在裁剪图片。")?;
         let monitor = capture.monitor.clone().ok_or("无法读取采集显示器。")?;
         let rect = Region::from_selection(&capture.image, &points, width, height)?;

@@ -22,7 +22,7 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-single-instance", "dep:rfd"]
+desktop = ["dep:tauri", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-single-instance", "dep:rfd", "dep:windows"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
@@ -38,6 +38,7 @@ tauri = { version = "2.12", features = ["tray-icon", "image-png"], optional = tr
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 rfd = { version = "0.17", default-features = false, optional = true }
+windows = { version = "0.62.2", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"], optional = true }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Wdk_System_SystemServices"] }
 
 [target.'cfg(windows)'.build-dependencies]

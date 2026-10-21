@@ -49,6 +49,40 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "backgroundColor": "#ffffff"
+      },
+      {
+        "label": "record",
+        "url": "index.html?record",
+        "title": "FreeCut · 录屏",
+        "width": 408,
+        "height": 292,
+        "visible": false,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "minimizable": false,
+        "maximizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#17232f"
+      },
+      {
+        "label": "record-region",
+        "url": "index.html?record-region",
+        "title": "FreeCut · 录制范围",
+        "create": false,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "minimizable": false,
+        "maximizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "backgroundColor": "#00000000"
       }
     ],
     "security": {

@@ -1064,6 +1064,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "tiny-skia",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

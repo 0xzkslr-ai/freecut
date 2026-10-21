@@ -59,7 +59,7 @@ impl Region {
             .ceil()
             .min(image.height as f64) as u32;
         if right.saturating_sub(x) < 48 || bottom.saturating_sub(y) < 48 {
-            return Err("滚动采集区域的宽高至少需要 48 个物理像素。".into());
+            return Err("采集区域的宽高至少需要 48 个物理像素。".into());
         }
         Ok(Self {
             x,

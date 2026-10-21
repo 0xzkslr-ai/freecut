@@ -1,6 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 
-async function mockDesktop(page: Page, overlay: boolean | "scroll" = false) {
+async function mockDesktop(
+  page: Page,
+  overlay: boolean | "scroll" | "record" | "record-region" = false,
+) {
   await page.addInitScript(
     ({ overlay }) => {
       const win = window as any;
@@ -65,6 +68,37 @@ async function mockDesktop(page: Page, overlay: boolean | "scroll" = false) {
             return args.hotkey;
           }
           if (cmd === "save_image") return "C:\\test\\截图.png";
+          if (cmd === "start_recording") return !win.cancelRecordingDialog;
+          if (cmd === "recording_state")
+            return {
+              id: 7,
+              width: 800,
+              height: 600,
+              region: { x: 120, y: 240, width: 800, height: 600 },
+              monitorName: "DISPLAY1",
+              elapsedMs: 62_000,
+              frames: 1860,
+              paused: false,
+              starting: overlay === "record-region",
+              finishing: false,
+              message: "正在录屏",
+              hotkey: "Ctrl+Alt+A",
+            };
+          if (cmd === "pause_recording")
+            win.send("recording-progress", {
+              id: 7,
+              width: 800,
+              height: 600,
+              region: { x: 120, y: 240, width: 800, height: 600 },
+              monitorName: "DISPLAY1",
+              elapsedMs: 62_000,
+              frames: 1860,
+              paused: args.paused,
+              starting: false,
+              finishing: false,
+              message: args.paused ? "已暂停" : "正在录屏",
+              hotkey: "Ctrl+Alt+A",
+            });
           if (cmd === "start_scroll" && win.rejectScroll)
             throw "采集区域过小，请重新框选。";
           if (cmd === "scroll_state")
@@ -105,7 +139,15 @@ async function mockDesktop(page: Page, overlay: boolean | "scroll" = false) {
     }),
   );
   await page.goto(
-    overlay === "scroll" ? "/?scroll" : overlay ? "/?overlay" : "/",
+    overlay === "record-region"
+      ? "/?record-region"
+      : overlay === "record"
+        ? "/?record"
+        : overlay === "scroll"
+          ? "/?scroll"
+          : overlay
+            ? "/?overlay"
+            : "/",
   );
   await expect
     .poll(() =>
@@ -114,11 +156,15 @@ async function mockDesktop(page: Page, overlay: boolean | "scroll" = false) {
           (window as any).calls.some(
             (c: any) =>
               c.cmd ===
-              (overlay === "scroll"
-                ? "scroll_state"
-                : overlay
-                  ? "show_overlay"
-                  : "frontend_ready"),
+              (overlay === "record-region"
+                ? "recording_region_ready"
+                : overlay === "record"
+                  ? "recording_state"
+                  : overlay === "scroll"
+                    ? "scroll_state"
+                    : overlay
+                      ? "show_overlay"
+                      : "frontend_ready"),
           ),
         overlay,
       ),
@@ -131,6 +177,163 @@ const commands = (page: Page, command: string) =>
       (window as any).calls.filter((call: any) => call.cmd === command),
     command,
   );
+
+test("recording entry and completed video use the selected monitor and saved path", async ({
+  page,
+}) => {
+  await mockDesktop(page);
+  await page.getByRole("button", { name: "开始录屏", exact: true }).click();
+  expect((await commands(page, "start_capture"))[0].args).toEqual({
+    monitorId: "display1",
+    recording: true,
+  });
+  await page.evaluate(() =>
+    (window as any).send("recording-complete", {
+      id: 9,
+      width: 800,
+      height: 600,
+      elapsedMs: 62_000,
+      bytes: 2_000_000,
+      path: "C:\\test\\录屏.mp4",
+      warning: null,
+    }),
+  );
+  await expect(page.locator("#video-result")).toBeVisible();
+  await expect(page.locator("#video-details")).toContainText("00:01:02");
+  await expect(page.locator("#video-path")).toHaveText("C:\\test\\录屏.mp4");
+  await expect(page.locator("#save")).toBeHidden();
+  await page.getByRole("button", { name: "打开视频", exact: true }).click();
+  expect((await commands(page, "open_recording"))[0].args).toEqual({
+    id: 9,
+    folder: false,
+  });
+  await page.evaluate(() =>
+    (window as any).send("preview-changed", {
+      id: 10,
+      width: 400,
+      height: 300,
+    }),
+  );
+  await expect(page.locator("#video-result")).toBeHidden();
+  await expect(page.locator("#save")).toBeVisible();
+});
+
+test("cancelling the recording save dialog retains the rectangle for retry", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.keyboard.press("KeyM");
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 450);
+  await page.mouse.up();
+  await page.evaluate(() => ((window as any).cancelRecordingDialog = true));
+  await page.locator("#record-capture").click();
+  await expect(page.locator("#record-capture")).toBeVisible();
+  await expect(page.locator("#record-capture")).toBeEnabled();
+  await page.evaluate(() => ((window as any).cancelRecordingDialog = false));
+  await page.locator("#record-capture").click();
+  const calls = await commands(page, "start_recording");
+  expect(calls).toHaveLength(2);
+  expect(calls[1].args.points).toEqual([
+    [200, 200],
+    [500, 200],
+    [500, 450],
+    [200, 450],
+  ]);
+  expect(await commands(page, "accept_capture")).toHaveLength(0);
+});
+
+test("recording controls pause, resume and stop once while finalizing", async ({
+  page,
+}) => {
+  await mockDesktop(page, "record");
+  await expect(page.locator("#record-time")).toHaveText("00:01:02");
+  await expect(page.locator("#record-size")).toHaveText("800 × 600 px");
+  await expect(page.locator("#record-position")).toHaveText(
+    "DISPLAY1 · 左上角 (120, 240)",
+  );
+  await page.locator("#record-locate").click();
+  expect((await commands(page, "highlight_recording_region"))[0].args).toEqual({
+    id: 7,
+  });
+  await page.getByRole("button", { name: "暂停", exact: true }).click();
+  await expect(page.locator("#record-state")).toHaveText("已暂停");
+  await expect(page.locator("#app")).toHaveAttribute("data-phase", "paused");
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  expect(
+    (await commands(page, "pause_recording")).map(
+      (call: any) => call.args.paused,
+    ),
+  ).toEqual([true, false]);
+  await page.getByRole("button", { name: "结束并保存", exact: true }).click();
+  expect((await commands(page, "finish_recording"))[0].args.id).toBe(7);
+  await page.evaluate(() =>
+    (window as any).send("recording-progress", {
+      id: 7,
+      width: 800,
+      height: 600,
+      elapsedMs: 62_000,
+      frames: 1860,
+      paused: false,
+      starting: false,
+      finishing: true,
+      message: "正在保存",
+      hotkey: "Ctrl+Alt+A",
+    }),
+  );
+  await expect(page.locator("#record-finish")).toBeDisabled();
+  await expect(page.locator("#record-cancel")).toBeDisabled();
+  await expect(page.locator("#record-locate")).toBeDisabled();
+  await expect(page.locator("#app")).toHaveAttribute("data-phase", "finishing");
+});
+
+test("recording boundary acknowledges paint and follows pause and completion", async ({
+  page,
+}) => {
+  await mockDesktop(page, "record-region");
+  await expect(page.locator(".recording-region")).toBeVisible();
+  await expect(page.locator("#region-size")).toHaveText("800 × 600 px");
+  await expect
+    .poll(async () => (await commands(page, "recording_region_shown")).length)
+    .toBe(1);
+  expect((await commands(page, "recording_region_shown"))[0].args).toEqual({
+    id: 7,
+  });
+  expect(
+    await page
+      .locator(".recording-region")
+      .evaluate((element) => getComputedStyle(element).pointerEvents),
+  ).toBe("none");
+  await page.evaluate(() =>
+    (window as any).send("recording-progress", {
+      id: 7,
+      width: 800,
+      height: 600,
+      region: { x: 120, y: 240, width: 800, height: 600 },
+      elapsedMs: 62_000,
+      frames: 1860,
+      paused: true,
+      starting: false,
+      finishing: false,
+      message: "已暂停",
+      hotkey: "Ctrl+Alt+A",
+    }),
+  );
+  await expect(page.locator("#region-state")).toHaveText("已暂停");
+  await expect(page.locator("#app")).toHaveAttribute("data-phase", "paused");
+  await expect(page.locator(".recording-region")).toHaveCSS(
+    "border-top-style",
+    "dashed",
+  );
+  await page.evaluate(() => (window as any).send("recording-highlight", 99));
+  await expect(page.locator("#app")).not.toHaveClass(/region-highlight/);
+  await page.evaluate(() => (window as any).send("recording-highlight", 7));
+  await expect(page.locator("#app")).toHaveClass(/region-highlight/);
+  await page.evaluate(() => (window as any).send("recording-ended", null));
+  await expect(page.locator("#region-size")).toHaveText("");
+  await expect(page.locator("#app")).not.toHaveClass(/region-highlight/);
+});
 
 test("main flow, tools, capture, preview, save and clipboard", async ({
   page,
