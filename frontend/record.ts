@@ -27,7 +27,7 @@ export async function mountRecord(root: HTMLElement) {
       <div class="record-brand"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/><circle cx="10" cy="10" r="2.5"/></svg><span>FreeCut <span class="record-title">区域录屏</span></span></div>
       <span class="record-status"><i class="record-dot" aria-hidden="true"></i><span id="record-state">准备录制</span></span>
     </header>
-    <div class="record-timing"><p id="record-time" class="record-time" aria-label="已录制时长">00:00:00</p><div class="record-format"><strong>MP4</strong><span>无音频</span></div></div>
+    <div class="record-timing"><p id="record-time" class="record-time" aria-label="已录制时长">00:00:00</p><div class="record-format"><strong id="record-output-format">MP4</strong><span id="record-output-detail">无音频</span><span id="record-output-size"></span></div></div>
     <button id="record-locate" class="record-region-button" title="定位录制范围，边框会加粗高亮" disabled>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
       <span class="record-region-description"><strong id="record-size">正在准备录制区域</strong><span id="record-position">录制范围将以边框标出</span></span><span class="record-locate-label">定位范围</span>
@@ -56,6 +56,12 @@ export async function mountRecord(root: HTMLElement) {
   }
   function update(info: RecordingInfo) {
     current = info;
+    get("record-output-format").textContent =
+      info.format === "gif" ? "GIF" : "MP4";
+    get("record-output-detail").textContent =
+      `${info.frameRate ?? 30} FPS · ${info.format === "gif" ? "循环播放" : "无音频"}`;
+    get("record-output-size").textContent =
+      `输出 ${info.width} × ${info.height}`;
     get("record-pause-label").textContent = info.paused ? "继续" : "暂停";
     const status = recordingStatus(info);
     root.dataset.phase = status.phase;

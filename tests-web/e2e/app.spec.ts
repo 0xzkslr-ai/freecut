@@ -186,6 +186,7 @@ test("recording entry and completed video use the selected monitor and saved pat
   expect((await commands(page, "start_capture"))[0].args).toEqual({
     monitorId: "display1",
     recording: true,
+    recordingOptions: { format: "mp4", gifFps: 10, gifMaxEdge: 960 },
   });
   await page.evaluate(() =>
     (window as any).send("recording-complete", {
@@ -216,6 +217,133 @@ test("recording entry and completed video use the selected monitor and saved pat
   );
   await expect(page.locator("#video-result")).toBeHidden();
   await expect(page.locator("#save")).toBeVisible();
+});
+
+test("GIF settings are passed to recording and completed animations preview inline", async ({
+  page,
+}) => {
+  await mockDesktop(page);
+  await expect(page.locator("#gif-settings")).toBeHidden();
+  await page.locator("#record-format-choice").selectOption("gif");
+  await expect(page.locator("#gif-settings")).toBeVisible();
+  await expect(page.locator("#gif-fps")).toHaveValue("10");
+  await expect(page.locator("#gif-size")).toHaveValue("960");
+  await page.locator("#gif-fps").selectOption("15");
+  await page.locator("#gif-size").selectOption("480");
+  await page.getByRole("button", { name: "开始录制 GIF", exact: true }).click();
+  expect((await commands(page, "start_capture"))[0].args).toEqual({
+    monitorId: "display1",
+    recording: true,
+    recordingOptions: { format: "gif", gifFps: 15, gifMaxEdge: 480 },
+  });
+  await page.evaluate(() =>
+    (window as any).send("recording-complete", {
+      id: 9,
+      width: 480,
+      height: 360,
+      elapsedMs: 5000,
+      bytes: 2000,
+      path: "C:\\test\\demo.gif",
+      format: "gif",
+      warning: null,
+    }),
+  );
+  await expect(page.locator("#gif-preview")).toBeVisible();
+  await expect(page.locator("#gif-preview")).toHaveAttribute(
+    "src",
+    /recording-9$/,
+  );
+  await expect(page.locator("#video-details")).toContainText("GIF");
+  await page.getByRole("button", { name: "打开 GIF", exact: true }).click();
+  expect((await commands(page, "open_recording"))[0].args).toEqual({
+    id: 9,
+    folder: false,
+  });
+  await page.evaluate(() =>
+    (window as any).send("recording-complete", {
+      id: 10,
+      width: 480,
+      height: 360,
+      elapsedMs: 5000,
+      bytes: 30_000_000,
+      path: "C:\\test\\large.gif",
+      format: "gif",
+      warning: null,
+    }),
+  );
+  await expect(page.locator("#gif-preview")).toBeHidden();
+  await expect(page.locator("#gif-preview")).not.toHaveAttribute("src");
+  await expect(page.locator("#preview-note")).toContainText("文件较大");
+  await page.evaluate(() =>
+    (window as any).send("preview-changed", {
+      id: 11,
+      width: 400,
+      height: 300,
+    }),
+  );
+  await expect(page.locator("#video-result")).toBeHidden();
+  await expect(page.locator("#preview-image")).toBeVisible();
+});
+
+test("GIF selection keeps its settings when the save dialog is cancelled", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.evaluate(() =>
+    (window as any).send("capture-started", {
+      id: 8,
+      width: 2080,
+      height: 1440,
+      mode: "rectangle",
+      recording: true,
+      recordingOptions: { format: "gif", gifFps: 15, gifMaxEdge: 720 },
+    }),
+  );
+  await expect
+    .poll(async () =>
+      (await commands(page, "show_overlay")).some(
+        (call: any) => call.args.id === 8,
+      ),
+    )
+    .toBe(true);
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 450);
+  await page.mouse.up();
+  await page.evaluate(() => ((window as any).cancelRecordingDialog = true));
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#accept")).toBeEnabled();
+  await expect(page.locator("#accept")).toContainText("GIF");
+  await page.evaluate(() => ((window as any).cancelRecordingDialog = false));
+  await page.keyboard.press("Enter");
+  const calls = await commands(page, "start_recording");
+  expect(calls).toHaveLength(2);
+  for (const call of calls) {
+    expect(call.args.id).toBe(8);
+    expect(call.args.options).toEqual({
+      format: "gif",
+      gifFps: 15,
+      gifMaxEdge: 720,
+    });
+  }
+});
+
+test("ordinary rectangle selections can record GIF directly", async ({
+  page,
+}) => {
+  await mockDesktop(page, true);
+  await page.keyboard.press("KeyM");
+  await page.mouse.move(200, 200);
+  await page.mouse.down();
+  await page.mouse.move(500, 450);
+  await page.mouse.up();
+  await page.locator("#gif-capture").click();
+  expect((await commands(page, "start_recording"))[0].args.options).toEqual({
+    format: "gif",
+    gifFps: 10,
+    gifMaxEdge: 960,
+  });
+  expect(await commands(page, "accept_capture")).toHaveLength(0);
 });
 
 test("cancelling the recording save dialog retains the rectangle for retry", async ({
@@ -286,6 +414,36 @@ test("recording controls pause, resume and stop once while finalizing", async ({
   await expect(page.locator("#record-cancel")).toBeDisabled();
   await expect(page.locator("#record-locate")).toBeDisabled();
   await expect(page.locator("#app")).toHaveAttribute("data-phase", "finishing");
+});
+
+test("GIF controls distinguish output dimensions from the capture region", async ({
+  page,
+}) => {
+  await mockDesktop(page, "record");
+  await page.evaluate(() =>
+    (window as any).send("recording-progress", {
+      id: 7,
+      width: 720,
+      height: 540,
+      format: "gif",
+      frameRate: 15,
+      region: { x: 120, y: 240, width: 1600, height: 1200 },
+      monitorName: "DISPLAY1",
+      elapsedMs: 5000,
+      frames: 75,
+      paused: false,
+      starting: false,
+      finishing: false,
+      message: "正在录制 GIF",
+      hotkey: "Ctrl+Alt+A",
+    }),
+  );
+  await expect(page.locator("#record-output-format")).toHaveText("GIF");
+  await expect(page.locator("#record-output-detail")).toContainText("15 FPS");
+  await expect(page.locator("#record-output-size")).toHaveText(
+    "输出 720 × 540",
+  );
+  await expect(page.locator("#record-size")).toHaveText("1600 × 1200 px");
 });
 
 test("recording boundary acknowledges paint and follows pause and completion", async ({

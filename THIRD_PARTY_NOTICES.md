@@ -8,6 +8,7 @@ FreeCut's own source code is MIT licensed. Dependencies retain their own license
   contributors: MIT OR Apache-2.0. https://github.com/tauri-apps/tauri
 - **tiny-skia**, contributors: BSD-3-Clause. https://github.com/linebender/tiny-skia
 - **png**, image-rs contributors: MIT OR Apache-2.0. https://github.com/image-rs/image-png
+- **gif**, image-rs contributors: MIT OR Apache-2.0. https://github.com/image-rs/image-gif
 - **serde / serde_json**, contributors: MIT OR Apache-2.0. https://serde.rs
 - **windows-sys**, Microsoft and contributors: MIT OR Apache-2.0.
   https://github.com/microsoft/windows-rs

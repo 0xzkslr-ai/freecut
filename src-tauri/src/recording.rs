@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
     stitching::{CoverageRect, Region},
-    video::{self, Timeline, FRAME_RATE},
+    video::{self, RecordingFormat, RecordingOptions, Timeline},
 };
 use std::{
     fs,
+    io::{BufWriter, Read},
     sync::{
         atomic::{AtomicU64, Ordering},
         Condvar,
@@ -37,6 +38,8 @@ pub(super) struct RecordingInfo {
     hotkey: String,
     region: CoverageRect,
     monitor_name: String,
+    format: RecordingFormat,
+    frame_rate: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -49,6 +52,77 @@ pub(super) struct RecordingResult {
     bytes: u64,
     path: String,
     warning: Option<String>,
+    format: RecordingFormat,
+}
+
+enum RecordingEncoder {
+    Mp4(encoder::VideoEncoder),
+    Gif(crate::gif_recording::GifEncoder<BufWriter<fs::File>>),
+}
+
+impl RecordingEncoder {
+    fn new(path: &std::path::Path, info: &RecordingInfo) -> Result<Self, String> {
+        if info.format == RecordingFormat::Gif {
+            let file = fs::File::create(path)
+                .map_err(|error| format!("无法创建 GIF 录制文件：{error}"))?;
+            return crate::gif_recording::GifEncoder::new(
+                BufWriter::new(file),
+                info.width,
+                info.height,
+            )
+            .map(Self::Gif);
+        }
+        let encoder = match encoder::VideoEncoder::new(path, info.width, info.height, true) {
+            Ok(encoder) => encoder,
+            Err(error) => {
+                diagnostics::write("WARN", &format!("Hardware encoder initialization failed; trying system software encoder: {error}"));
+                let _ = fs::remove_file(path);
+                encoder::VideoEncoder::new(path, info.width, info.height, false)?
+            }
+        };
+        Ok(Self::Mp4(encoder))
+    }
+
+    fn write(&mut self, pixels: &[u8], timestamp: i64, duration: i64) -> Result<(), String> {
+        match self {
+            Self::Mp4(encoder) => encoder.write(pixels, timestamp, duration),
+            Self::Gif(encoder) => encoder.write(pixels, timestamp, duration),
+        }
+    }
+
+    fn finish(self) -> Result<(), String> {
+        match self {
+            Self::Mp4(encoder) => encoder.finish(),
+            Self::Gif(encoder) => encoder.finish(),
+        }
+    }
+}
+
+pub(super) const GIF_PREVIEW_LIMIT: u64 = 20 * 1024 * 1024;
+
+pub(super) fn gif_preview_path(app: &AppHandle, id: u64) -> Option<PathBuf> {
+    app.state::<AppState>()
+        .lock()
+        .recorded_video
+        .as_ref()
+        .filter(|result| {
+            result.id == id
+                && result.format == RecordingFormat::Gif
+                && result.bytes <= GIF_PREVIEW_LIMIT
+        })
+        .map(|result| PathBuf::from(&result.path))
+}
+
+pub(super) fn read_gif_preview(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|_| "GIF 文件已被移动或无法读取。")?;
+    let mut bytes = Vec::new();
+    file.take(GIF_PREVIEW_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "无法读取 GIF 预览。")?;
+    if bytes.len() as u64 > GIF_PREVIEW_LIMIT {
+        return Err("GIF 较大，请打开文件查看。".into());
+    }
+    Ok(bytes)
 }
 
 struct Control {
@@ -258,10 +332,11 @@ pub(super) async fn start_recording(
     points: Vec<Point>,
     width: f64,
     height: f64,
+    options: Option<RecordingOptions>,
 ) -> Result<bool, String> {
     require(&window, "overlay")?;
     validate_viewport(&window, width, height)?;
-    let (region, monitor, background, hotkey) = {
+    let (region, monitor, background, hotkey, options) = {
         let state = app.state::<AppState>();
         let mut data = state.lock();
         if data.modal || data.recording.is_some() || data.scroll.is_some() {
@@ -274,7 +349,13 @@ pub(super) async fn start_recording(
             .ok_or("本次选区已结束。")?;
         let monitor = capture.monitor.clone().ok_or("无法读取录屏显示器。")?;
         let rect = Region::from_selection(&capture.image, &points, width, height)?;
-        video::encoded_size(rect.width, rect.height)?;
+        let options = capture
+            .info
+            .recording_options
+            .or(options)
+            .unwrap_or_default()
+            .validate()?;
+        options.output_size(rect.width, rect.height)?;
         let region = Monitor {
             x: monitor.x + rect.x as i32,
             y: monitor.y + rect.y as i32,
@@ -289,6 +370,7 @@ pub(super) async fn start_recording(
             data.active_hotkey
                 .clone()
                 .unwrap_or_else(|| "托盘菜单".into()),
+            options,
         );
         data.modal = true;
         selected
@@ -303,9 +385,23 @@ pub(super) async fn start_recording(
             .as_secs();
         rfd::FileDialog::new()
             .set_parent(&owner)
-            .set_title("选择 MP4 保存位置，然后开始录屏")
-            .add_filter("MP4 视频", &["mp4"])
-            .set_file_name(format!("FreeCut-{stamp}.mp4"))
+            .set_title(format!(
+                "选择 {} 保存位置，然后开始录制",
+                options.format.label()
+            ))
+            .add_filter(
+                format!(
+                    "{} {}",
+                    options.format.label(),
+                    if options.format == RecordingFormat::Gif {
+                        "动图"
+                    } else {
+                        "视频"
+                    }
+                ),
+                &[options.format.extension()],
+            )
+            .set_file_name(format!("FreeCut-{stamp}.{}", options.format.extension()))
             .save_file()
     })
     .await
@@ -315,9 +411,12 @@ pub(super) async fn start_recording(
     };
     if !destination
         .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(options.format.extension()))
     {
-        return Err("录屏文件必须使用 .mp4 扩展名，请重新选择保存位置。".into());
+        return Err(format!(
+            "录制文件必须使用 .{} 扩展名，请重新选择保存位置。",
+            options.format.extension()
+        ));
     }
     // Confirm the selection is still live after the native dialog was dismissed.
     if !app
@@ -341,7 +440,7 @@ pub(super) async fn start_recording(
     let parent = destination.parent().ok_or("保存目录无效。")?;
     let temporary = tempfile::Builder::new()
         .prefix(".freecut-record-")
-        .suffix(".mp4")
+        .suffix(&format!(".{}", options.format.extension()))
         .tempfile_in(parent)
         .map_err(|error| format!("无法在保存目录创建录屏文件：{error}"))?
         .into_temp_path();
@@ -374,7 +473,7 @@ pub(super) async fn start_recording(
         .and_then(|_| panel.set_size(panel_size))
         .and_then(|_| panel.set_always_on_top(true))
         .map_err(|error| format!("无法准备录屏控制窗口：{error}"))?;
-    let (out_width, out_height) = video::encoded_size(region.width, region.height)?;
+    let (out_width, out_height) = options.output_size(region.width, region.height)?;
     let info = RecordingInfo {
         id,
         width: out_width,
@@ -384,7 +483,11 @@ pub(super) async fn start_recording(
         paused: false,
         starting: true,
         finishing: false,
-        message: "正在准备录屏… MP4 · 画面与鼠标指针 · 无音频".into(),
+        message: format!(
+            "正在准备录制… {} · {} FPS",
+            options.format.label(),
+            options.frame_rate()
+        ),
         hotkey,
         region: CoverageRect {
             x: region.x,
@@ -393,6 +496,8 @@ pub(super) async fn start_recording(
             height: region.height,
         },
         monitor_name: monitor.name.clone(),
+        format: options.format,
+        frame_rate: options.frame_rate(),
     };
     let job = Arc::new(Job {
         control: Mutex::new(Control {
@@ -499,20 +604,13 @@ fn record(
     }
     let info = job.info();
     let mut screen = capture::ScreenCapture::new(job.region.clone())?;
-    let encoder = match encoder::VideoEncoder::new(temporary, info.width, info.height, true) {
-        Ok(encoder) => encoder,
-        Err(error) => {
-            diagnostics::write("WARN", &format!("Hardware encoder initialization failed; trying system software encoder: {error}"));
-            let _ = fs::remove_file(temporary);
-            encoder::VideoEncoder::new(temporary, info.width, info.height, false)?
-        }
-    };
+    let mut encoder = RecordingEncoder::new(temporary, &info)?;
     let mut pending: Option<(Vec<u8>, i64)> = None;
     let mut frames = 0u64;
     let mut warning = None;
     let mut last_publish = Instant::now();
     let mut last_monitor_check = Instant::now();
-    let interval = Duration::from_secs_f64(1. / FRAME_RATE as f64);
+    let interval = Duration::from_secs_f64(1. / info.frame_rate as f64);
     loop {
         let started = Instant::now();
         let mut control = job.lock();
@@ -546,9 +644,16 @@ fn record(
             }
             last_monitor_check = Instant::now();
         }
-        let frame = screen
-            .frame()
-            .and_then(|bgra| video::bgra_to_nv12(bgra, job.region.width, job.region.height));
+        let frame = screen.frame().and_then(|bgra| match info.format {
+            RecordingFormat::Mp4 => video::bgra_to_nv12(bgra, job.region.width, job.region.height),
+            RecordingFormat::Gif => video::bgra_to_rgb(
+                bgra,
+                job.region.width,
+                job.region.height,
+                info.width,
+                info.height,
+            ),
+        });
         let frame = match frame {
             Ok(frame) => frame,
             Err(error) => {
@@ -570,12 +675,16 @@ fn record(
         if control.timeline.is_none() {
             control.timeline = Some(Timeline::new(now));
             control.info.starting = false;
-            control.info.message =
-                if job.region.width != info.width || job.region.height != info.height {
-                    "正在录屏。为兼容 MP4，奇数宽高在边缘补齐 1 像素。".into()
-                } else {
-                    "正在录屏 · MP4 · 无音频".into()
-                };
+            control.info.message = if info.format == RecordingFormat::Gif {
+                format!(
+                    "正在录制 GIF · {} FPS · 输出 {} × {} px",
+                    info.frame_rate, info.width, info.height
+                )
+            } else if job.region.width != info.width || job.region.height != info.height {
+                "正在录屏。为兼容 MP4，奇数宽高在边缘补齐 1 像素。".into()
+            } else {
+                "正在录屏 · MP4 · 无音频".into()
+            };
         }
         let time = hns(control.timeline.as_ref().unwrap().elapsed(now));
         drop(control);
@@ -609,7 +718,7 @@ fn record(
         }
         control.finishing = true;
         control.info.finishing = true;
-        control.info.message = "正在完成 MP4 文件，请稍候…".into();
+        control.info.message = format!("正在完成 {} 文件，请稍候…", info.format.label());
         control
             .timeline
             .as_ref()
@@ -641,6 +750,7 @@ fn record(
             .len(),
         path: job.destination.to_string_lossy().into_owned(),
         warning,
+        format: info.format,
     }))
 }
 
@@ -763,7 +873,10 @@ pub(super) fn pause_recording(
         control.info.message = if paused {
             "已暂停，暂停时间不会计入视频。"
         } else {
-            "正在录屏 · MP4 · 无音频"
+            match control.info.format {
+                RecordingFormat::Mp4 => "正在录屏 · MP4 · 无音频",
+                RecordingFormat::Gif => "正在录制 GIF",
+            }
         }
         .into();
     }
@@ -786,7 +899,7 @@ pub(super) fn finish(app: &AppHandle) -> Result<(), String> {
         }
         control.finishing = true;
         control.info.finishing = true;
-        control.info.message = "正在结束录屏并保存 MP4…".into();
+        control.info.message = format!("正在结束录制并保存 {}…", control.info.format.label());
     }
     job.changed.notify_all();
     publish(app, &job);

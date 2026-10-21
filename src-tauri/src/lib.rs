@@ -1,3 +1,5 @@
+#[cfg(any(all(windows, feature = "desktop"), test))]
+mod gif_recording;
 pub mod imaging;
 pub mod settings;
 pub mod stitching;

@@ -18,7 +18,21 @@ export interface Session {
   mode: Mode;
   crop?: boolean;
   recording?: boolean;
+  recordingOptions?: RecordingOptions | null;
 }
+
+export type RecordingFormat = "mp4" | "gif";
+export interface RecordingOptions {
+  format: RecordingFormat;
+  gifFps: number;
+  gifMaxEdge: number;
+}
+export const defaultRecordingOptions = (): RecordingOptions => ({
+  format: "mp4",
+  gifFps: 10,
+  gifMaxEdge: 960,
+});
+export const GIF_PREVIEW_LIMIT = 20 * 1024 * 1024;
 export interface Preview {
   id: number;
   width: number;
@@ -73,6 +87,8 @@ export interface RecordingInfo {
   hotkey: string;
   region?: CoverageRect;
   monitorName?: string;
+  format?: RecordingFormat;
+  frameRate?: number;
 }
 export interface RecordingResult {
   id: number;
@@ -82,10 +98,13 @@ export interface RecordingResult {
   bytes: number;
   path: string;
   warning: string | null;
+  format?: RecordingFormat;
 }
 
 export const imageUrl = (id: number, kind: "source" | "preview") =>
   convertFileSrc(`${kind}-${id}`, "freecut");
+export const recordingUrl = (id: number) =>
+  convertFileSrc(`recording-${id}`, "freecut");
 export const backend = {
   init: () => invoke<InitialState>("initial_state"),
   ready: () => invoke<void>("frontend_ready"),
@@ -94,8 +113,15 @@ export const backend = {
   monitors: () => invoke<Monitor[]>("list_monitors"),
   capture: (monitorId: string | null) =>
     invoke<void>("start_capture", { monitorId }),
-  recordSelection: (monitorId: string | null) =>
-    invoke<void>("start_capture", { monitorId, recording: true }),
+  recordSelection: (
+    monitorId: string | null,
+    recordingOptions = defaultRecordingOptions(),
+  ) =>
+    invoke<void>("start_capture", {
+      monitorId,
+      recording: true,
+      recordingOptions,
+    }),
   session: () => invoke<Session | null>("current_session"),
   showOverlay: (id: number) => invoke<void>("show_overlay", { id }),
   cancel: (id: number) => invoke<void>("cancel_capture", { id }),
@@ -108,8 +134,20 @@ export const backend = {
     invoke<void>("pause_scroll", { id, paused }),
   finishScroll: (id: number) => invoke<void>("finish_scroll", { id }),
   cancelScroll: (id: number) => invoke<void>("cancel_scroll", { id }),
-  record: (id: number, points: Point[], width: number, height: number) =>
-    invoke<boolean>("start_recording", { id, points, width, height }),
+  record: (
+    id: number,
+    points: Point[],
+    width: number,
+    height: number,
+    options?: RecordingOptions,
+  ) =>
+    invoke<boolean>("start_recording", {
+      id,
+      points,
+      width,
+      height,
+      ...(options ? { options } : {}),
+    }),
   recordingState: () => invoke<RecordingInfo | null>("recording_state"),
   recordingRegionReady: () => invoke<void>("recording_region_ready"),
   recordingRegionShown: (id: number) =>

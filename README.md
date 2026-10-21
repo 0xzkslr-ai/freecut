@@ -2,7 +2,7 @@
   <img src="src-tauri/icons/128x128.png" width="80" height="80" alt="FreeCut 图标" />
   <h1>FreeCut</h1>
   <p><strong>让截图，自由一点。</strong></p>
-  <p>自由套索 · 多边形 · 矩形选取 · 滚动长截图 · 区域录屏 · 透明 PNG</p>
+  <p>自由套索 · 多边形 · 矩形选取 · 滚动长截图 · MP4 / GIF 录制 · 透明 PNG</p>
   <p>
     <a href="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml"><img src="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml/badge.svg" alt="构建与测试" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-087f73" alt="MIT License" /></a>
@@ -13,11 +13,11 @@
 
 FreeCut 是一款轻量级 Windows 截图工具。你可以像画画一样圈出想要的轮廓，
 逐点勾勒多边形，也可以直接框选矩形。选区之外的内容变为透明，结果可保存为 PNG
-或复制到剪贴板。矩形选区还支持滚动拼接：手动滚动页面或移动地图，将屏幕之外的内容逐步拼成大图；也可以录制区域画面，保存为 MP4。
+或复制到剪贴板。矩形选区还支持滚动拼接：手动滚动页面或移动地图，将屏幕之外的内容逐步拼成大图；也可以录制区域画面，保存为 MP4 视频或 GIF 动图。
 
-A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, MP4 region recording, transparent PNG export, global shortcuts and system tray support.
+A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, MP4 and GIF region recording, transparent PNG export, global shortcuts and system tray support.
 
-使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.76 MB**；
+使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.80 MB**；
 体积随编译版本变化，不包含系统 WebView2 Runtime。
 
 ## 功能
@@ -37,9 +37,9 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 - **单实例运行**：重复启动打开已有实例；后台取消截图后回到后台。
 - **滚动拼接**：矩形框定地图区域，你手动上下左右移动地图，工具自动对齐、拼接；支持暂停、继续及全局键结束。
 - **再次裁剪**：拼接图或普通截图均可再次用套索、多边形、矩形裁剪，保留原始像素和透明区域。
-- **区域录屏**：矩形框选后录制画面和鼠标指针，支持暂停、继续、快捷键结束，保存为 MP4。
+- **区域录制**：矩形框选后录制画面和鼠标指针，支持暂停、继续、快捷键结束，可选 MP4 视频或 GIF 动图。
 
-**v0.4.0 新增区域录屏**：保存为 MP4，配有持续显示的录制范围边框、时长与尺寸提示，以及支持暂停、继续和定位范围的悬浮控制窗。保留启动诊断日志、WebView2 检测和已有截图功能。
+**v0.5.0 新增 GIF 动图录制**：可选 5 / 10 / 15 FPS 和输出尺寸，复用录制范围边框与悬浮控制窗，完成后可直接预览动图。保留 MP4 录屏、已有截图功能及启动诊断日志。
 
 ## 截图效果
 
@@ -97,21 +97,23 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 3. 闭合后拖动选区调整位置；多边形可拖动顶点，矩形可拖动角点调整大小。
 4. 按 `Enter` 确认，在预览中复制图片或保存 PNG。`Esc` 取消本次截图。
 
-### 区域录屏
+### 区域录屏与 GIF
 
-1. 点击「开始录屏」，拖动矩形选择区域，再按 `Enter`；也可在普通矩形选区中点击「录屏」。
-2. 选择 MP4 保存位置后开始录制。取消保存对话框会保留选区，可以调整后重试。
+1. 在主窗口选择「MP4 视频」或「GIF 动图」，点击开始按钮，拖动矩形选择区域，再按 `Enter`；也可在普通矩形选区中点击「录屏」或「录制 GIF」。
+2. 选择对应格式的保存位置后开始录制。取消保存对话框会保留选区，可以调整后重试。
 3. 录制范围始终显示红色边框，暂停后变为琥珀色虚线并显示「已暂停」。边框支持鼠标穿透，可以直接操作区域内的软件。
 4. 悬浮控制窗显示时长、区域尺寸和位置，支持暂停、继续和「结束并保存」。点击「定位范围」可加粗高亮边框；拖动标题可以移动控制窗。
 5. 按当前全局截图快捷键结束录屏；控制窗内按空格暂停或继续。完成后主窗口显示文件路径、时长和大小，可直接打开视频或所在文件夹。
 
-首版录制画面与鼠标指针，无音频。使用 Windows 自带 H.264 编码器，优先尝试硬件编码，
-不可用时尝试系统软件编码；媒体组件只在开始录屏时加载。控制窗和范围边框从画面中排除，
-因此录屏需要 Windows 10 2004 或更新系统。
-目标帧率为 30 FPS，实际采集速度取决于区域大小、编码器和磁盘性能；暂停时间不计入视频。
-支持宽高至少 48 像素、最大 3840 × 2160 像素的区域。为兼容 H.264，奇数宽高会在边缘补齐 1 像素。
+录制画面与鼠标指针，无音频。MP4 使用 Windows 自带 H.264 编码器，优先尝试硬件编码，
+不可用时尝试系统软件编码；媒体组件只在录制 MP4 时加载。控制窗和范围边框从画面中排除，
+因此区域录制需要 Windows 10 2004 或更新系统。
+MP4 目标帧率为 30 FPS；GIF 可选 5、10、15 FPS，默认 10 FPS。实际采集速度取决于区域大小、编码器和磁盘性能；暂停时间不计入输出文件。
+GIF 默认将最长边缩至 960 像素，也可选择 720、480 像素或原始尺寸；保持比例，小选区不会放大。
+GIF 由 Rust 编码库在后台逐帧写入，循环播放，不经过 MP4 转换，不依赖系统 H.264 编码器。完成后主界面可直接预览；大于 20 MiB 的 GIF 通过「打开 GIF」查看。
+支持宽高至少 48 像素、最大 3840 × 2160 像素的采集区域。为兼容 H.264，MP4 的奇数宽高会在边缘补齐 1 像素，GIF 保留所选输出尺寸。
 录制期间逐帧写入保存目录的临时文件，正常结束后替换为所选文件名；取消录制不会改动已有目标文件。
-录屏时选择退出会先结束并保存 MP4，再退出程序；保存失败时保留窗口显示错误。
+录制时选择退出会先结束并保存所选格式的文件，再退出程序；保存失败时保留窗口显示错误。
 
 PNG 的画布是选区的最小外接矩形，轮廓外像素透明。预览棋盘格、操作提示和轮廓线
 不会导出。自交轮廓使用奇偶填充规则；粘贴后的透明效果取决于目标软件。

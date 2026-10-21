@@ -2,6 +2,7 @@ use crate::{
     imaging::{self, Image, Point, Preview},
     platform::{self, Monitor},
     settings::{self, Mode, Settings},
+    video::RecordingOptions,
 };
 use serde::Serialize;
 use std::{
@@ -28,6 +29,8 @@ struct SessionInfo {
     mode: Mode,
     crop: bool,
     recording: bool,
+    #[serde(rename = "recordingOptions")]
+    recording_options: Option<RecordingOptions>,
 }
 struct Capture {
     info: SessionInfo,
@@ -78,6 +81,16 @@ struct InitialState {
 fn window(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
     app.get_webview_window(label)
         .ok_or("应用窗口不可用，请重新启动。".into())
+}
+
+fn image_response(status: u16, mime: &str, bytes: Vec<u8>) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-store")
+        .header("Access-Control-Allow-Origin", "*")
+        .body(bytes)
+        .unwrap()
 }
 fn require(window: &WebviewWindow, label: &str) -> Result<(), String> {
     if window.label() == label {
@@ -213,6 +226,7 @@ fn begin_capture(
     app: &AppHandle,
     monitor_id: Option<String>,
     recording: bool,
+    recording_options: Option<RecordingOptions>,
 ) -> Result<(), String> {
     let main = window(app, "main")?;
     let overlay = window(app, "overlay")?;
@@ -265,6 +279,7 @@ fn begin_capture(
                 mode,
                 crop: false,
                 recording,
+                recording_options: recording.then(|| recording_options.unwrap_or_default()),
             };
             data.capture = Some(Capture {
                 info: info.clone(),
@@ -296,27 +311,34 @@ async fn start_capture(
     window: WebviewWindow,
     monitor_id: Option<String>,
     recording: Option<bool>,
+    recording_options: Option<RecordingOptions>,
 ) -> Result<(), String> {
     require(&window, "main")?;
-    capture_in_background(app, monitor_id, recording.unwrap_or(false)).await
+    let options = recording_options
+        .map(RecordingOptions::validate)
+        .transpose()?;
+    capture_in_background(app, monitor_id, recording.unwrap_or(false), options).await
 }
 
 async fn capture_in_background(
     app: AppHandle,
     monitor_id: Option<String>,
     recording: bool,
+    recording_options: Option<RecordingOptions>,
 ) -> Result<(), String> {
     // Keep the event loop free to apply window visibility changes before the
     // desktop is read, and keep PNG encoding off the UI thread as well.
-    tauri::async_runtime::spawn_blocking(move || begin_capture(&app, monitor_id, recording))
-        .await
-        .map_err(|_| "截图任务意外停止，请重试。".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        begin_capture(&app, monitor_id, recording, recording_options)
+    })
+    .await
+    .map_err(|_| "截图任务意外停止，请重试。".to_string())?
 }
 
 fn request_capture(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = capture_in_background(app.clone(), None, false).await {
+        if let Err(error) = capture_in_background(app.clone(), None, false, None).await {
             let scheduled = app.clone();
             let _ = app.run_on_main_thread(move || report_error(&scheduled, error));
         }
@@ -468,6 +490,7 @@ fn edit_result(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
             mode: data.settings.mode,
             crop: true,
             recording: false,
+            recording_options: None,
         };
         data.capture = Some(Capture {
             info: info.clone(),
@@ -789,7 +812,21 @@ pub fn run() {
                 })
                 .build(),
         )
-        .register_uri_scheme_protocol("freecut", |context, request| {
+        .register_asynchronous_uri_scheme_protocol("freecut", |context, request, responder| {
+            let path = request.uri().path().trim_start_matches('/');
+            if let Some(id) = path
+                .strip_prefix("recording-")
+                .and_then(|id| id.parse::<u64>().ok())
+            {
+                let saved_path = recording::gif_preview_path(context.app_handle(), id);
+                tauri::async_runtime::spawn_blocking(move || {
+                    let bytes = saved_path.and_then(|path| recording::read_gif_preview(&path).ok());
+                    let (status, bytes) =
+                        bytes.map(|bytes| (200, bytes)).unwrap_or((404, Vec::new()));
+                    responder.respond(image_response(status, "image/gif", bytes));
+                });
+                return;
+            }
             let state = context.app_handle().state::<AppState>();
             let data = state.lock();
             let path = request.uri().path().trim_start_matches('/');
@@ -811,13 +848,7 @@ pub fn run() {
             let (status, bytes) = bytes
                 .map(|bytes| (200, bytes.as_ref().clone()))
                 .unwrap_or((404, Vec::new()));
-            tauri::http::Response::builder()
-                .status(status)
-                .header("Content-Type", "image/png")
-                .header("Cache-Control", "no-store")
-                .header("Access-Control-Allow-Origin", "*")
-                .body(bytes)
-                .unwrap()
+            responder.respond(image_response(status, "image/png", bytes));
         })
         .setup(|app| {
             diagnostics::write("INFO", "Native setup started");

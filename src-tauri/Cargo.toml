@@ -1,6 +1,6 @@
 [package]
 name = "freecut"
-version = "0.4.0"
+version = "0.5.0"
 description = "Freehand and polygon screenshots with transparent edges"
 authors = ["FreeCut contributors"]
 license = "MIT"
@@ -32,6 +32,7 @@ tiny-skia = { version = "0.12", default-features = false, features = ["std", "si
 png = "0.18"
 tempfile = "3"
 rustfft = { version = "6.4", default-features = false, features = ["sse"] }
+gif = "0.14.2"
 
 [target.'cfg(windows)'.dependencies]
 tauri = { version = "2.12", features = ["tray-icon", "image-png"], optional = true }

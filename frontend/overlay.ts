@@ -1,9 +1,14 @@
-import { backend, imageUrl, type Session } from "./bridge";
+import {
+  backend,
+  imageUrl,
+  defaultRecordingOptions,
+  type Session,
+} from "./bridge";
 import { Selection, bounds, clampPoint, type Point } from "./selection";
 import { imageViewport, viewportPoints } from "./viewport";
 
 export async function mountOverlay(root: HTMLElement) {
-  root.innerHTML = `<canvas id="selection-canvas" aria-label="截图选区画布"></canvas><p id="hint" class="overlay-hint" role="status"></p><div id="selection-toolbar" class="selection-toolbar" hidden><span id="selection-size"></span><button id="reset">重选&nbsp; R</button><button id="cancel">取消&nbsp; Esc</button><button id="scroll-capture" hidden>滚动截图</button><button id="record-capture" hidden>录屏</button><button id="accept" class="primary">确认&nbsp; Enter</button></div>`;
+  root.innerHTML = `<canvas id="selection-canvas" aria-label="截图选区画布"></canvas><p id="hint" class="overlay-hint" role="status"></p><div id="selection-toolbar" class="selection-toolbar" hidden><span id="selection-size"></span><button id="reset">重选&nbsp; R</button><button id="cancel">取消&nbsp; Esc</button><button id="scroll-capture" hidden>滚动截图</button><button id="record-capture" hidden>录屏</button><button id="gif-capture" hidden>录制 GIF</button><button id="accept" class="primary">确认&nbsp; Enter</button></div>`;
   const canvas = root.querySelector<HTMLCanvasElement>("canvas")!;
   const ctx = canvas.getContext("2d", { alpha: false })!;
   const hint = root.querySelector<HTMLParagraphElement>("#hint")!;
@@ -11,6 +16,7 @@ export async function mountOverlay(root: HTMLElement) {
   const accept = root.querySelector<HTMLButtonElement>("#accept")!;
   const scroll = root.querySelector<HTMLButtonElement>("#scroll-capture")!;
   const record = root.querySelector<HTMLButtonElement>("#record-capture")!;
+  const gif = root.querySelector<HTMLButtonElement>("#gif-capture")!;
   const selection = new Selection();
   let image: HTMLImageElement | null = null;
   let session: Session | null = null;
@@ -97,7 +103,7 @@ export async function mountOverlay(root: HTMLElement) {
       (session?.recording
         ? selection.complete
           ? "拖动选区或角点调整范围 · Enter 开始录屏 · Esc 取消\n选择保存位置后开始录制，暂停时间不计入视频。"
-          : "录屏：拖出一个矩形区域 · Esc 取消\nMP4 · 画面与鼠标指针 · 无音频"
+          : `录制${session.recordingOptions?.format === "gif" ? " GIF" : " MP4"}：拖出一个矩形区域 · Esc 取消\n画面与鼠标指针 · 暂停时间不计入`
         : selection.complete
           ? `拖动选区移动位置${selection.mode === "polygon" ? " · 拖动顶点调整轮廓" : selection.mode === "rectangle" ? " · 拖动角点调整大小" : ""}  |  Enter 确认 · R 重选 · Tab 隐藏提示 · Esc 取消${selection.mode === "rectangle" && !session?.crop ? "\n滚动截图：手动移动地图，按全局截图键结束；控制条无空位时收起到托盘。" : ""}`
           : selection.mode === "lasso"
@@ -111,8 +117,9 @@ export async function mountOverlay(root: HTMLElement) {
       selection.mode !== "rectangle" || !!session?.crop || !!session?.recording;
     record.hidden =
       selection.mode !== "rectangle" || !!session?.crop || !!session?.recording;
+    gif.hidden = record.hidden;
     accept.textContent = session?.recording
-      ? "开始录屏 · Enter"
+      ? `开始${session.recordingOptions?.format === "gif" ? " GIF" : "录屏"} · Enter`
       : "确认 · Enter";
     const b = bounds(selection.points);
     root.querySelector("#selection-size")!.textContent =
@@ -149,7 +156,9 @@ export async function mountOverlay(root: HTMLElement) {
       resolving = false;
     }
   }
-  async function confirm(action: "image" | "scroll" | "record" = "image") {
+  async function confirm(
+    action: "image" | "scroll" | "record" | "gif" = "image",
+  ) {
     if (!session || resolving) return;
     if (!selection.complete) {
       if (!selection.finish())
@@ -161,29 +170,36 @@ export async function mountOverlay(root: HTMLElement) {
       return;
     }
     resolving = true;
-    accept.disabled = scroll.disabled = record.disabled = true;
+    accept.disabled = scroll.disabled = record.disabled = gif.disabled = true;
     try {
       const expectedId = session.id;
       const view = viewport();
-      const recording = action === "record" || !!session.recording;
-      const accepted = await (
-        recording
-          ? backend.record
-          : action === "scroll"
-            ? backend.scroll
-            : backend.accept
-      )(
-        session.id,
-        viewportPoints(
-          selection.points,
-          view.width,
-          view.height,
-          innerWidth,
-          innerHeight,
-        ),
+      const recording =
+        action === "record" || action === "gif" || !!session.recording;
+      const points = viewportPoints(
+        selection.points,
+        view.width,
+        view.height,
         innerWidth,
         innerHeight,
       );
+      const accepted = await (recording
+        ? backend.record(
+            session.id,
+            points,
+            innerWidth,
+            innerHeight,
+            session.recordingOptions ??
+              (action === "gif"
+                ? { ...defaultRecordingOptions(), format: "gif" }
+                : undefined),
+          )
+        : (action === "scroll" ? backend.scroll : backend.accept)(
+            session.id,
+            points,
+            innerWidth,
+            innerHeight,
+          ));
       if (session?.id !== expectedId || (recording && accepted === false))
         return;
       session = null;
@@ -194,7 +210,11 @@ export async function mountOverlay(root: HTMLElement) {
       render();
     } finally {
       resolving = false;
-      accept.disabled = scroll.disabled = record.disabled = false;
+      accept.disabled =
+        scroll.disabled =
+        record.disabled =
+        gif.disabled =
+          false;
     }
   }
   canvas.onpointerdown = (event) => {
@@ -254,6 +274,7 @@ export async function mountOverlay(root: HTMLElement) {
   accept.onclick = () => void confirm();
   scroll.onclick = () => void confirm("scroll");
   record.onclick = () => void confirm("record");
+  gif.onclick = () => void confirm("gif");
   window.addEventListener("keydown", (event) => {
     if (resolving) return;
     if (

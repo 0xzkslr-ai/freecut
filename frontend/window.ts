@@ -1,9 +1,12 @@
 import {
   backend,
   imageUrl,
+  recordingUrl,
+  GIF_PREVIEW_LIMIT,
   type Monitor,
   type Preview,
   type RecordingResult,
+  type RecordingOptions,
 } from "./bridge";
 import { recordingTime } from "./record";
 import { hotkeyFromEvent } from "./hotkey";
@@ -23,7 +26,9 @@ export async function mountMain(root: HTMLElement) {
           </div>
           <label for="monitor">截取屏幕</label><select id="monitor" aria-label="选择要截取的显示器"></select>
           <button class="primary capture" id="capture">开始截图</button><p class="muted small">Ctrl + Shift + A · 窗口内快捷键</p>
-          <button id="record">开始录屏</button><p class="muted small">框选区域 · MP4 · 无音频</p>
+          <div class="record-settings"><label for="record-format-choice">区域录制</label><div class="record-start-row"><select id="record-format-choice" aria-label="录制格式"><option value="mp4">MP4 视频</option><option value="gif">GIF 动图</option></select><button id="record">开始录屏</button></div>
+          <div id="gif-settings" class="gif-settings" hidden><label for="gif-fps">帧率<select id="gif-fps"><option value="5">5 FPS · 更小</option><option value="10" selected>10 FPS · 标准</option><option value="15">15 FPS · 更流畅</option></select></label><label for="gif-size">输出尺寸<select id="gif-size"><option value="960" selected>最长边 960 px</option><option value="720">最长边 720 px</option><option value="480">最长边 480 px</option><option value="0">原始尺寸</option></select></label></div>
+          <p id="record-setting-note" class="muted small">框选区域 · 30 FPS · 无音频</p></div>
           <label for="hotkey">全局截图快捷键</label>
           <div class="hotkey-row"><input id="hotkey" readonly spellcheck="false" aria-describedby="hotkey-status" title="点击后按下新的组合键，再点击应用" /><button id="apply-hotkey">应用</button></div>
           <p id="hotkey-status" class="muted small" role="status"></p>
@@ -31,7 +36,7 @@ export async function mountMain(root: HTMLElement) {
         </aside>
         <section class="card preview-card" aria-label="截图预览">
           <div class="preview-heading"><h2>截图预览</h2><span id="dimensions" class="muted">尚未截图</span></div>
-          <div class="checker" id="preview"><div class="empty"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M13 14 47 19 52 40 32 53 12 38Z"/><circle cx="13" cy="14" r="4"/></svg><strong>只截取你想要的形状</strong><p>选择左侧工具，开始一次截图。<br/>选区以外的部分会变为透明。</p></div><img id="preview-image" alt="透明截图预览" hidden draggable="false" /><div id="video-result" class="video-result" hidden><span class="video-symbol" aria-hidden="true">▶</span><strong>录屏已保存</strong><p id="video-details"></p><p id="video-path"></p></div></div>
+          <div class="checker" id="preview"><div class="empty"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M13 14 47 19 52 40 32 53 12 38Z"/><circle cx="13" cy="14" r="4"/></svg><strong>只截取你想要的形状</strong><p>选择左侧工具，开始一次截图。<br/>选区以外的部分会变为透明。</p></div><img id="preview-image" alt="透明截图预览" hidden draggable="false" /><div id="video-result" class="video-result" hidden><img id="gif-preview" alt="录制的 GIF 动图预览" hidden draggable="false" /><span id="video-symbol" class="video-symbol" aria-hidden="true">▶</span><strong id="video-title">录屏已保存</strong><p id="video-details"></p><p id="video-path"></p></div></div>
           <p id="preview-note" class="muted small">棋盘格表示透明区域，不会出现在导出的图片中。</p>
           <div class="actions"><button id="open-video" hidden>打开视频</button><button id="open-video-folder" hidden>打开文件夹</button><button id="edit" disabled>再次裁剪</button><button id="copy" disabled>复制图片&nbsp; Ctrl+C</button><button id="save" class="primary" disabled>保存 PNG&nbsp; Ctrl+S</button></div>
         </section>
@@ -45,6 +50,35 @@ export async function mountMain(root: HTMLElement) {
   const hotkeyStatus = get<HTMLParagraphElement>("hotkey-status");
   const capture = get<HTMLButtonElement>("capture");
   const record = get<HTMLButtonElement>("record");
+  const format = get<HTMLSelectElement>("record-format-choice");
+  const gifFps = get<HTMLSelectElement>("gif-fps");
+  const gifSize = get<HTMLSelectElement>("gif-size");
+  const gifPreview = get<HTMLImageElement>("gif-preview");
+  const clearGifPreview = () => {
+    gifPreview.hidden = true;
+    gifPreview.removeAttribute("src");
+  };
+  const recordingOptions = (): RecordingOptions => ({
+    format: format.value === "gif" ? "gif" : "mp4",
+    gifFps: Number(gifFps.value),
+    gifMaxEdge: Number(gifSize.value),
+  });
+  const updateRecordingSettings = () => {
+    const gif = format.value === "gif";
+    get("gif-settings").hidden = !gif;
+    record.textContent = gif ? "开始录制 GIF" : "开始录屏";
+    get("record-setting-note").textContent = gif
+      ? "框选区域 · 循环播放 · 暂停时间不计入"
+      : "框选区域 · 30 FPS · 无音频";
+  };
+  format.onchange = updateRecordingSettings;
+  gifPreview.onerror = () => {
+    if (gifPreview.hidden || !gifPreview.hasAttribute("src")) return;
+    clearGifPreview();
+    get("video-symbol").hidden = false;
+    get("preview-note").textContent =
+      "无法加载 GIF 预览，可以打开文件或所在文件夹查看。";
+  };
   const copy = get<HTMLButtonElement>("copy");
   const save = get<HTMLButtonElement>("save");
   const edit = get<HTMLButtonElement>("edit");
@@ -60,6 +94,7 @@ export async function mountMain(root: HTMLElement) {
     busy = true;
     capture.disabled = true;
     record.disabled = true;
+    format.disabled = gifFps.disabled = gifSize.disabled = true;
     try {
       await action();
     } catch (error) {
@@ -68,6 +103,7 @@ export async function mountMain(root: HTMLElement) {
       busy = false;
       capture.disabled = !monitor.options.length;
       record.disabled = !monitor.options.length;
+      format.disabled = gifFps.disabled = gifSize.disabled = false;
     }
   };
   const setModeButtons = (mode: Mode) => {
@@ -81,6 +117,7 @@ export async function mountMain(root: HTMLElement) {
       );
   };
   const updatePreview = (preview: Preview) => {
+    clearGifPreview();
     get("video-result").hidden = true;
     get("open-video").hidden = get("open-video-folder").hidden = true;
     edit.hidden = copy.hidden = save.hidden = false;
@@ -97,6 +134,9 @@ export async function mountMain(root: HTMLElement) {
     status("截图完成 · 可以再次裁剪、复制图片或保存透明 PNG。");
   };
   const updateRecording = (result: RecordingResult) => {
+    clearGifPreview();
+    const gif = result.format === "gif";
+    const previewGif = gif && result.bytes <= GIF_PREVIEW_LIMIT;
     video = result;
     hasImage = false;
     get("preview-image").hidden = true;
@@ -104,14 +144,27 @@ export async function mountMain(root: HTMLElement) {
     get("video-result").hidden = false;
     get("open-video").hidden = get("open-video-folder").hidden = false;
     edit.hidden = copy.hidden = save.hidden = true;
-    root.querySelector(".preview-heading h2")!.textContent = "录屏完成";
+    root.querySelector(".preview-heading h2")!.textContent = gif
+      ? "GIF 录制完成"
+      : "录屏完成";
+    get("video-title").textContent = gif ? "GIF 已保存" : "录屏已保存";
+    get("open-video").textContent = gif ? "打开 GIF" : "打开视频";
+    get("video-symbol").hidden = previewGif;
+    if (previewGif) {
+      gifPreview.hidden = false;
+      gifPreview.src = recordingUrl(result.id);
+    }
     get("dimensions").textContent = `${result.width} × ${result.height} px`;
     get("video-details").textContent =
-      `${recordingTime(result.elapsedMs)} · ${(result.bytes / 1e6).toFixed(2)} MB · MP4`;
+      `${recordingTime(result.elapsedMs)} · ${(result.bytes / 1e6).toFixed(2)} MB · ${gif ? "GIF" : "MP4"}`;
     get("video-path").textContent = result.path;
-    get("preview-note").textContent =
-      "录屏已保存到所选位置，可使用系统播放器打开。";
-    status(result.warning ? `录屏已保存 · ${result.warning}` : "录屏已保存。");
+    get("preview-note").textContent = gif
+      ? previewGif
+        ? "GIF 正在循环预览，也可以打开文件查看。"
+        : "GIF 文件较大，可以打开文件查看。"
+      : "录屏已保存到所选位置，可使用系统播放器打开。";
+    const saved = gif ? "GIF 已保存" : "录屏已保存";
+    status(result.warning ? `${saved} · ${result.warning}` : `${saved}。`);
   };
   const updateMonitors = (monitors: Monitor[]) => {
     const previous = monitor.value;
@@ -133,7 +186,9 @@ export async function mountMain(root: HTMLElement) {
   };
   capture.onclick = () => void attempt(() => backend.capture(monitor.value));
   record.onclick = () =>
-    void attempt(() => backend.recordSelection(monitor.value));
+    void attempt(() =>
+      backend.recordSelection(monitor.value, recordingOptions()),
+    );
   get("open-video").onclick = () =>
     void attempt(async () => {
       if (video) await backend.openRecording(video.id, false);
