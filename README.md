@@ -17,7 +17,7 @@ FreeCut 是一款轻量级 Windows 截图工具。你可以像画画一样圈出
 
 A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, transparent PNG export, global shortcuts and system tray support.
 
-使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.64 MB**；
+使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.68 MB**；
 体积随编译版本变化，不包含系统 WebView2 Runtime。
 
 ## 功能
@@ -38,7 +38,7 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 - **滚动拼接**：矩形框定地图区域，你手动上下左右移动地图，工具自动对齐、拼接；支持暂停、继续及全局键结束。
 - **再次裁剪**：拼接图或普通截图均可再次用套索、多边形、矩形裁剪，保留原始像素和透明区域。
 
-**v0.3.0 新增滚动拼接与再次裁剪**，并改进截图前的主窗口隐藏、滚动控制窗置顶与移动。
+**v0.3.1 新增启动诊断日志、WebView2 检测和启动失败弹窗**，并修复滚动拼接在返回和换向时可能出现的像素偏移。
 
 ## 截图效果
 
@@ -81,6 +81,13 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 
 在已经构建的源码目录中，双击 `run.bat` 启动，`run_background.bat` 直接进入托盘。
 也可运行 `FreeCut.exe --background`；不会添加开机启动项。
+
+启动诊断日志保存在 `%LOCALAPPDATA%\FreeCut\logs\`，每次启动生成一个
+`startup-*.log`，保留最近 10 份，每份最多约 256 KB。目录无法写入时回退到
+`%TEMP%\FreeCut\logs\`。日志记录版本、Windows 版本、WebView2 检测结果、
+窗口加载和初始化错误，不记录截图像素或剪贴板内容。
+缺少运行时、初始化失败或主界面超过 30 秒未就绪时，会显示原生错误弹窗并附上
+实际日志路径。反馈“无法启动”时，请提供对应日志；启动超时提示后程序仍可继续初始化。
 
 ## 使用
 

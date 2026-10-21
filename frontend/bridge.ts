@@ -63,6 +63,8 @@ export const imageUrl = (id: number, kind: "source" | "preview") =>
 export const backend = {
   init: () => invoke<InitialState>("initial_state"),
   ready: () => invoke<void>("frontend_ready"),
+  frontendFailed: (message: string) =>
+    invoke<void>("frontend_failed", { message }),
   monitors: () => invoke<Monitor[]>("list_monitors"),
   capture: (monitorId: string | null) =>
     invoke<void>("start_capture", { monitorId }),

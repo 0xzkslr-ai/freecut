@@ -13,6 +13,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+#[path = "diagnostics.rs"]
+mod diagnostics;
 #[path = "scrolling.rs"]
 mod scrolling;
 
@@ -95,7 +97,11 @@ fn report_error(app: &AppHandle, error: String) {
 #[tauri::command]
 fn initial_state(app: AppHandle, window: WebviewWindow) -> Result<InitialState, String> {
     require(&window, "main")?;
-    let monitors = platform::monitors().unwrap_or_default();
+    diagnostics::write("INFO", "Main frontend requesting initial state");
+    let monitors = platform::monitors().unwrap_or_else(|error| {
+        diagnostics::write("WARN", &format!("Monitor enumeration failed: {error}"));
+        Vec::new()
+    });
     let state = app.state::<AppState>();
     let data = state.lock();
     Ok(InitialState {
@@ -113,9 +119,46 @@ fn frontend_ready(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
     if !std::env::args().any(|arg| arg == "--background")
         || !app.state::<AppState>().lock().tray_available
     {
-        show_main(&app);
+        let capturing = app.state::<AppState>().lock().capturing;
+        if !capturing {
+            window
+                .unminimize()
+                .map_err(|error| format!("无法恢复主窗口：{error}"))?;
+            window
+                .show()
+                .map_err(|error| format!("无法显示主窗口：{error}"))?;
+            if let Err(error) = window.set_focus() {
+                diagnostics::write("WARN", &format!("Cannot focus main window: {error}"));
+            }
+            diagnostics::write("INFO", "Main window shown");
+        }
+    } else {
+        diagnostics::write("INFO", "Background startup; main window stays hidden");
     }
+    diagnostics::ready();
     Ok(())
+}
+
+#[tauri::command]
+async fn frontend_failed(window: WebviewWindow, message: String) -> Result<(), String> {
+    let label = window.label().to_owned();
+    if !matches!(label.as_str(), "main" | "overlay" | "scroll") {
+        return Err("当前窗口无法报告界面错误。".into());
+    }
+    // Preserve the error even if showing the failed window stalls on the UI thread.
+    diagnostics::write("ERROR", &format!("Frontend {label}: {message}"));
+    if label == "main" {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        diagnostics::failure(
+            "FreeCut 界面初始化或运行失败",
+            &format!("窗口：{label}\n{message}"),
+        );
+    })
+    .await
+    .map_err(|_| "无法显示界面错误提示。".to_string())
 }
 
 #[tauri::command]
@@ -620,8 +663,37 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    diagnostics::init();
+    diagnostics::watch_startup();
+    diagnostics::write("INFO", "Checking WebView2 Runtime");
+    match tauri::webview_version() {
+        Ok(version) => diagnostics::write("INFO", &format!("WebView2 Runtime: {version}")),
+        Err(error) => {
+            diagnostics::failure(
+                "FreeCut 无法启动",
+                &format!(
+                    "未检测到可用的 Microsoft WebView2 Runtime，或运行时不可用。\n请安装或修复 WebView2 后重新启动，也可使用 FreeCut 安装包安装所需运行时。\n官方下载：https://developer.microsoft.com/microsoft-edge/webview2/\n\n检测信息：{error}"
+                ),
+            );
+            return;
+        }
+    }
+    diagnostics::write("INFO", "Building Tauri application and windows");
+    let built = tauri::Builder::default()
+        // Tauri's IPC script has no trailing semicolon. Keep the scripts separate.
+        .append_invoke_initialization_script(concat!("\n;", include_str!("startup.js")))
+        .on_page_load(|webview, payload| {
+            diagnostics::write(
+                "INFO",
+                &format!(
+                    "Window {} page load: {:?}",
+                    webview.label(),
+                    payload.event()
+                ),
+            );
+        })
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            diagnostics::write("INFO", "Second instance requested activation");
             if !args.iter().any(|arg| arg == "--background") {
                 if scrolling::active(app) {
                     scrolling::show_controls(app);
@@ -688,7 +760,9 @@ pub fn run() {
                 .unwrap()
         })
         .setup(|app| {
+            diagnostics::write("INFO", "Native setup started");
             let path = app.path().app_config_dir()?.join("settings.json");
+            diagnostics::write("INFO", &format!("Loading settings: {}", path.display()));
             let settings = settings::load(&path);
             app.manage(AppState(Mutex::new(Data {
                 settings: settings.clone(),
@@ -703,7 +777,16 @@ pub fn run() {
                 result: None,
                 scroll: None,
             })));
-            let tray_available = build_tray(app.handle()).is_ok();
+            let tray_available = match build_tray(app.handle()) {
+                Ok(()) => {
+                    diagnostics::write("INFO", "System tray initialized");
+                    true
+                }
+                Err(error) => {
+                    diagnostics::write("WARN", &format!("System tray unavailable: {error}"));
+                    false
+                }
+            };
             let registered = parse_shortcut(&settings.hotkey).and_then(|shortcut| {
                 app.global_shortcut()
                     .register(shortcut)
@@ -713,9 +796,16 @@ pub fn run() {
             let mut data = state.lock();
             data.tray_available = tray_available;
             match registered {
-                Ok(()) => data.active_hotkey = Some(settings.hotkey),
-                Err(error) => data.hotkey_error = Some(error),
+                Ok(()) => {
+                    diagnostics::write("INFO", "Global shortcut registered");
+                    data.active_hotkey = Some(settings.hotkey);
+                }
+                Err(error) => {
+                    diagnostics::write("WARN", &format!("Global shortcut unavailable: {error}"));
+                    data.hotkey_error = Some(error);
+                }
             }
+            diagnostics::write("INFO", "Native setup complete; waiting for main frontend");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -742,6 +832,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             initial_state,
             frontend_ready,
+            frontend_failed,
             list_monitors,
             start_capture,
             current_session,
@@ -761,12 +852,22 @@ pub fn run() {
             hide_to_tray,
             quit_app
         ])
-        .build(tauri::generate_context!())
-        .expect("无法启动 FreeCut")
-        .run(|app, event| {
+        .build(tauri::generate_context!());
+    match built {
+        Ok(app) => app.run(|app, event| {
+            if let tauri::RunEvent::Ready = event {
+                diagnostics::write("INFO", "Tauri event loop ready");
+            }
             if let tauri::RunEvent::Exit = event {
+                diagnostics::stop();
+                diagnostics::write("INFO", "Application exiting");
                 scrolling::stop(app);
                 let _ = app.global_shortcut().unregister_all();
             }
-        });
+        }),
+        Err(error) => {
+            diagnostics::failure("FreeCut 启动失败", &format!("无法创建应用或窗口：{error}"))
+        }
+    }
+    diagnostics::stop();
 }
