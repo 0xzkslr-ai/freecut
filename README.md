@@ -2,7 +2,7 @@
   <img src="src-tauri/icons/128x128.png" width="80" height="80" alt="FreeCut 图标" />
   <h1>FreeCut</h1>
   <p><strong>让截图，自由一点。</strong></p>
-  <p>自由套索 · 多边形 · 矩形选取 · 滚动长截图 · 透明 PNG</p>
+  <p>自由套索 · 多边形 · 矩形选取 · 滚动长截图 · 区域录屏 · 透明 PNG</p>
   <p>
     <a href="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml"><img src="https://github.com/0xzkslr-ai/freecut/actions/workflows/ci.yml/badge.svg" alt="构建与测试" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-087f73" alt="MIT License" /></a>
@@ -13,9 +13,9 @@
 
 FreeCut 是一款轻量级 Windows 截图工具。你可以像画画一样圈出想要的轮廓，
 逐点勾勒多边形，也可以直接框选矩形。选区之外的内容变为透明，结果可保存为 PNG
-或复制到剪贴板。矩形选区还支持滚动拼接：手动滚动页面或移动地图，将屏幕之外的内容逐步拼成大图。
+或复制到剪贴板。矩形选区还支持滚动拼接：手动滚动页面或移动地图，将屏幕之外的内容逐步拼成大图；也可以录制区域画面，保存为 MP4。
 
-A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, transparent PNG export, global shortcuts and system tray support.
+A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle selections, scrolling capture, MP4 region recording, transparent PNG export, global shortcuts and system tray support.
 
 使用 **Tauri 2 + TypeScript + Rust**。本机 Windows x64 发布构建的 exe 约 **4.76 MB**；
 体积随编译版本变化，不包含系统 WebView2 Runtime。
@@ -39,7 +39,7 @@ A lightweight Windows screenshot tool with freehand lasso, polygon and rectangle
 - **再次裁剪**：拼接图或普通截图均可再次用套索、多边形、矩形裁剪，保留原始像素和透明区域。
 - **区域录屏**：矩形框选后录制画面和鼠标指针，支持暂停、继续、快捷键结束，保存为 MP4。
 
-**v0.3.1 新增启动诊断日志、WebView2 检测和启动失败弹窗**，并修复滚动拼接在返回和换向时可能出现的像素偏移。
+**v0.4.0 新增区域录屏**：保存为 MP4，配有持续显示的录制范围边框、时长与尺寸提示，以及支持暂停、继续和定位范围的悬浮控制窗。保留启动诊断日志、WebView2 检测和已有截图功能。
 
 ## 截图效果
 
